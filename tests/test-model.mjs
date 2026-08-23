@@ -44,4 +44,37 @@ assert.equal(
   JSON.stringify(["one", "two"]),
 )
 
+const starred = model.toggledFavoriteRows([
+  { name: "one", favorite: true },
+  { name: "two", favorite: false },
+  { name: "three", favorite: false },
+], 2)
+assert.equal(starred.favorite, true)
+assert.equal(starred.targetIndex, 0)
+assert.equal(
+  JSON.stringify(starred.rows.map((row) => [row.name, row.favorite])),
+  JSON.stringify([["three", true], ["one", true], ["two", false]]),
+)
+
+const unstarred = model.toggledFavoriteRows([
+  { name: "one", favorite: true },
+  { name: "two", favorite: true },
+  { name: "three", favorite: false },
+], 0)
+assert.equal(unstarred.favorite, false)
+assert.equal(unstarred.targetIndex, 1)
+assert.equal(
+  JSON.stringify(unstarred.rows.map((row) => [row.name, row.favorite])),
+  JSON.stringify([["two", true], ["one", false], ["three", false]]),
+)
+
+assert.deepEqual(
+  [0, 1, 2, 3, 4, 5].map((index) => model.reorderOffset(index, 4, 0, 48)),
+  [48, 48, 48, 48, -192, 0],
+)
+assert.deepEqual(
+  [0, 1, 2].map((index) => model.reorderOffset(index, 0, 1, 48)),
+  [48, -48, 0],
+)
+
 console.log("PASS: omamux model")

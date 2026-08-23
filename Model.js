@@ -110,3 +110,40 @@ function favoriteOrder(sessions) {
     if (rows[i].favorite === true) names.push(String(rows[i].name || ""))
   return names
 }
+
+function toggledFavoriteRows(sessions, index) {
+  var rows = Array.isArray(sessions) ? sessions.slice(0) : []
+  var source = clampedIndex(index, rows.length)
+  if (source < 0) return { rows: rows, targetIndex: -1, favorite: false }
+
+  var original = rows[source] || ({})
+  var session = ({})
+  for (var key in original) session[key] = original[key]
+
+  rows.splice(source, 1)
+  if (original.favorite === true) {
+    session.favorite = false
+    session.starredAt = 0
+
+    var target = 0
+    while (target < rows.length && rows[target].favorite === true) target++
+    rows.splice(target, 0, session)
+    return { rows: rows, targetIndex: target, favorite: false }
+  }
+
+  session.favorite = true
+  rows.unshift(session)
+  return { rows: rows, targetIndex: 0, favorite: true }
+}
+
+function reorderOffset(index, from, to, step) {
+  var row = Number(index)
+  var source = Number(from)
+  var target = Number(to)
+  var distance = Number(step)
+  if (source < 0 || target < 0 || !(distance > 0)) return 0
+  if (row === source) return (target - source) * distance
+  if (source < target && row > source && row <= target) return -distance
+  if (source > target && row >= target && row < source) return distance
+  return 0
+}

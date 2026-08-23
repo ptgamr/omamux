@@ -25,6 +25,16 @@ Panel {
   property string actionError: ""
   property bool closeAfterAction: false
   property double nowMs: Date.now()
+  property bool reorderAnimating: false
+  property int reorderFrom: -1
+  property int reorderTo: -1
+  property var reorderedRows: []
+  property var reorderAction: []
+  property bool dragReordering: false
+  property int dragFrom: -1
+  property int dragTo: -1
+  property bool favoriteSyncPending: false
+  property var expectedFavoriteOrder: []
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
@@ -32,6 +42,9 @@ Panel {
   readonly property color availableColor: Color.accent
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property bool actionBusy: actionProcess.running
+  readonly property bool interactionBusy: actionBusy || reorderAnimating || dragReordering || favoriteSyncPending
+  readonly property int reorderDuration: 180
+  readonly property int dragDisplaceDuration: 110
   readonly property int favoriteCount: {
     var count = 0
     for (var i = 0; i < rows.length; i++)
@@ -92,29 +105,32 @@ Panel {
   }
 
   function moveSelection(delta) {
-    if (rows.length === 0) return
+    if (rows.length === 0 || interactionBusy) return
     cursorActive = true
     selectedIndex = Model.clampedIndex(selectedIndex + delta, rows.length)
     revealSelection()
   }
 
   function activateSelected() {
+    if (interactionBusy) return
     var session = selectedSession()
     if (session) attachSession(String(session.name))
   }
 
   function selectRow(index) {
+    if (interactionBusy) return
     cursorActive = true
     selectedIndex = Model.clampedIndex(index, rows.length)
   }
 
   function runAction(args, shouldClose) {
-    if (actionBusy || !hostWidget) return
+    if (interactionBusy || !hostWidget) return false
     actionError = ""
     actionKind = String(args[0] || "action")
     closeAfterAction = shouldClose === true
     actionProcess.command = [hostWidget.backendPath].concat(args)
     actionProcess.running = true
+    return true
   }
 
   function applyAction(raw) {
@@ -128,6 +144,9 @@ Panel {
       if (hostWidget) hostWidget.refresh()
       if (shouldClose) close()
     } else {
+      favoriteSyncTimer.stop()
+      favoriteSyncPending = false
+      expectedFavoriteOrder = []
       actionError = result.error
       syncRows()
     }
@@ -138,7 +157,16 @@ Panel {
   }
 
   function toggleFavorite(name) {
-    runAction(["favorite", "toggle", name], false)
+    if (interactionBusy) return
+
+    var index = -1
+    for (var i = 0; i < rows.length; i++) {
+      if (String(rows[i].name || "") === name) { index = i; break }
+    }
+    if (index < 0) return
+
+    var toggled = Model.toggledFavoriteRows(rows, index)
+    animateReorder(index, toggled.targetIndex, toggled.rows, ["favorite", "toggle", name])
   }
 
   function favoriteNames(values) {
@@ -146,18 +174,112 @@ Panel {
   }
 
   function moveFavorite(from, to) {
-    if (actionBusy || from < 0 || from >= favoriteCount) return
+    if (interactionBusy || from < 0 || from >= favoriteCount) return
     var target = Math.max(0, Math.min(favoriteCount - 1, to))
     if (from === target) return
 
     var next = rows.slice(0)
     var moved = next.splice(from, 1)[0]
     next.splice(target, 0, moved)
-    rows = next
+    animateReorder(from, target, next, ["favorite", "reorder"].concat(favoriteNames(next)))
+  }
+
+  function animatedRowOffset(index) {
+    var step = sessionRowHeight + sessionRowSpacing
+    if (dragReordering && dragFrom >= 0 && dragTo >= 0)
+      return Model.reorderOffset(index, dragFrom, dragTo, step)
+    if (reorderAnimating && reorderFrom >= 0 && reorderTo >= 0)
+      return Model.reorderOffset(index, reorderFrom, reorderTo, step)
+    return 0
+  }
+
+  function animateReorder(from, to, nextRows, actionArgs) {
+    if (interactionBusy || from < 0 || to < 0) return
+
+    reorderedRows = nextRows
+    reorderAction = actionArgs
+    reorderFrom = from
+    reorderTo = to
+    cursorActive = true
+
+    if (from === to) {
+      finishReorder()
+      return
+    }
+
+    reorderAnimating = true
+    reorderTimer.restart()
+  }
+
+  function finishReorder() {
+    var target = reorderTo
+    var nextRows = reorderedRows
+    var actionArgs = reorderAction
+
+    reorderAnimating = false
+    reorderFrom = -1
+    reorderTo = -1
+    reorderedRows = []
+    reorderAction = []
+
+    commitReorderedRows(target, nextRows, actionArgs)
+  }
+
+  function beginDrag(index) {
+    if (actionBusy || reorderAnimating || favoriteSyncPending
+        || index < 0 || index >= favoriteCount) return false
+    dragFrom = index
+    dragTo = index
+    dragReordering = true
+    cursorActive = true
+    selectedIndex = index
+    return true
+  }
+
+  function updateDrag(offset) {
+    if (!dragReordering) return
+    var step = sessionRowHeight + sessionRowSpacing
+    var target = dragFrom + Math.round(Number(offset || 0) / step)
+    dragTo = Math.max(0, Math.min(favoriteCount - 1, target))
+  }
+
+  function finishDrag() {
+    if (!dragReordering) return
+    var from = dragFrom
+    var target = dragTo
+
+    dragReordering = false
+    dragFrom = -1
+    dragTo = -1
+
+    if (from === target) return
+    var nextRows = rows.slice(0)
+    var moved = nextRows.splice(from, 1)[0]
+    nextRows.splice(target, 0, moved)
+    commitReorderedRows(target, nextRows,
+      ["favorite", "reorder"].concat(favoriteNames(nextRows)))
+  }
+
+  function commitReorderedRows(target, nextRows, actionArgs) {
+    rows = nextRows
     selectedIndex = target
     cursorActive = true
     revealSelection()
-    runAction(["favorite", "reorder"].concat(favoriteNames(next)), false)
+    expectedFavoriteOrder = favoriteNames(nextRows)
+    if (runAction(actionArgs, false)) {
+      favoriteSyncPending = true
+      favoriteSyncTimer.restart()
+    } else {
+      expectedFavoriteOrder = []
+    }
+  }
+
+  function favoriteOrderMatches(values) {
+    var actual = favoriteNames(values)
+    if (actual.length !== expectedFavoriteOrder.length) return false
+    for (var i = 0; i < actual.length; i++)
+      if (actual[i] !== expectedFavoriteOrder[i]) return false
+    return true
   }
 
   function moveSelectedFavorite(delta) {
@@ -167,7 +289,7 @@ Panel {
   }
 
   function startCreate() {
-    if (actionBusy || !hostWidget || !hostWidget.tmuxAvailable) return
+    if (interactionBusy || !hostWidget || !hostWidget.tmuxAvailable) return
     creating = true
     actionError = ""
     createText = Model.suggestSessionName(rows)
@@ -208,7 +330,16 @@ Panel {
 
   Connections {
     target: root.hostWidget
-    function onSessionsChanged() { root.syncRows() }
+    function onSessionsChanged() {
+      if (root.reorderAnimating || root.dragReordering) return
+      if (root.favoriteSyncPending) {
+        if (!root.favoriteOrderMatches(root.hostWidget.sessions)) return
+        favoriteSyncTimer.stop()
+        root.favoriteSyncPending = false
+        root.expectedFavoriteOrder = []
+      }
+      root.syncRows()
+    }
   }
 
   Timer {
@@ -216,6 +347,23 @@ Panel {
     running: root.opened
     repeat: true
     onTriggered: root.nowMs = Date.now()
+  }
+
+  Timer {
+    id: reorderTimer
+    interval: root.reorderDuration
+    onTriggered: root.finishReorder()
+  }
+
+  Timer {
+    id: favoriteSyncTimer
+    interval: 5000
+    onTriggered: {
+      root.favoriteSyncPending = false
+      root.expectedFavoriteOrder = []
+      root.syncRows()
+      if (root.hostWidget) root.hostWidget.refresh()
+    }
   }
 
   Process {
@@ -289,7 +437,6 @@ Panel {
                 tooltipText: "Refresh sessions (r)"
                 foreground: root.foreground
                 fontFamily: root.fontFamily
-                enabled: !root.actionBusy
                 onClicked: if (root.hostWidget) root.hostWidget.refresh()
               }
 
@@ -298,7 +445,7 @@ Panel {
                 tooltipText: "New session (n)"
                 foreground: root.foreground
                 fontFamily: root.fontFamily
-                enabled: !!root.hostWidget && root.hostWidget.tmuxAvailable && !root.actionBusy
+                enabled: !!root.hostWidget && root.hostWidget.tmuxAvailable
                 onClicked: root.startCreate()
               }
             }
@@ -381,7 +528,7 @@ Panel {
                 bordered: true
                 foreground: root.foreground
                 fontFamily: root.fontFamily
-                enabled: Model.validSessionName(root.createText) && !root.actionBusy
+                enabled: Model.validSessionName(root.createText) && !root.interactionBusy
                 onClicked: root.createSession()
               }
 
@@ -390,7 +537,7 @@ Panel {
                 text: "Cancel"
                 foreground: root.foreground
                 fontFamily: root.fontFamily
-                enabled: !root.actionBusy
+                enabled: !root.interactionBusy
                 onClicked: root.cancelCreate()
               }
             }
@@ -457,22 +604,44 @@ Panel {
               id: sessionRow
               required property var modelData
               required property int index
-              property real lastDragY: 0
               readonly property bool canReorder: modelData.favorite === true && root.favoriteCount > 1
               readonly property bool showReorder: canReorder && hasCursor
+              readonly property bool togglingFavorite: root.reorderAnimating
+                && index === root.reorderFrom
+                && root.reorderAction.length > 1
+                && root.reorderAction[0] === "favorite"
+                && root.reorderAction[1] === "toggle"
+              readonly property bool displayFavorite: togglingFavorite
+                ? modelData.favorite !== true
+                : modelData.favorite === true
+              property real animatedOffset: root.animatedRowOffset(index)
 
               width: sessionList.width
               height: root.sessionRowHeight
               hasCursor: root.cursorActive && index === root.selectedIndex
               foreground: root.foreground
               accent: Color.accent
-              z: dragHandler.active ? 2 : 0
-              transform: Translate { y: dragHandler.active ? dragHandler.translation.y : 0 }
+              z: dragHandler.active
+                || (root.reorderAnimating && index === root.reorderFrom)
+                ? 2 : 0
+              transform: Translate {
+                y: dragHandler.active ? dragHandler.translation.y : sessionRow.animatedOffset
+              }
+
+              Behavior on animatedOffset {
+                enabled: (root.reorderAnimating || root.dragReordering) && !dragHandler.active
+                NumberAnimation {
+                  duration: root.dragReordering
+                    ? root.dragDisplaceDuration
+                    : root.reorderDuration
+                  easing.type: Easing.OutCubic
+                }
+              }
 
               MouseArea {
                 anchors.fill: parent
                 hoverEnabled: true
-                enabled: !root.actionBusy
+                enabled: !root.interactionBusy
                 cursorShape: Qt.PointingHandCursor
                 onEntered: root.selectRow(sessionRow.index)
                 onClicked: root.attachSession(String(sessionRow.modelData.name))
@@ -481,15 +650,19 @@ Panel {
               DragHandler {
                 id: dragHandler
                 target: null
-                enabled: sessionRow.modelData.favorite === true && root.favoriteCount > 1 && !root.actionBusy
+                enabled: sessionRow.modelData.favorite === true
+                  && root.favoriteCount > 1
+                  && !root.actionBusy
+                  && !root.reorderAnimating
+                  && !root.favoriteSyncPending
                 xAxis.enabled: false
-                onTranslationChanged: sessionRow.lastDragY = translation.y
+                onTranslationChanged: root.updateDrag(translation.y)
                 onActiveChanged: {
-                  if (!active && Math.abs(sessionRow.lastDragY) > Style.space(20)) {
-                    var step = sessionRow.height + sessionList.spacing
-                    root.moveFavorite(sessionRow.index, sessionRow.index + Math.round(sessionRow.lastDragY / step))
+                  if (active) {
+                    root.beginDrag(sessionRow.index)
+                  } else {
+                    root.finishDrag()
                   }
-                  if (!active) sessionRow.lastDragY = 0
                 }
               }
 
@@ -550,36 +723,13 @@ Panel {
                   }
 
                   PanelActionButton {
-                    visible: sessionRow.showReorder
-                    iconText: "↑"
-                    tooltipText: "Move favorite up (h)"
-                    foreground: root.dim
-                    hoverColor: root.foreground
-                    fontFamily: root.fontFamily
-                    enabled: sessionRow.index > 0 && !root.actionBusy
-                    onClicked: root.moveFavorite(sessionRow.index, sessionRow.index - 1)
-                  }
-
-                  PanelActionButton {
-                    visible: sessionRow.showReorder
-                    iconText: "↓"
-                    tooltipText: "Move favorite down (l)"
-                    foreground: root.dim
-                    hoverColor: root.foreground
-                    fontFamily: root.fontFamily
-                    enabled: sessionRow.index < root.favoriteCount - 1 && !root.actionBusy
-                    onClicked: root.moveFavorite(sessionRow.index, sessionRow.index + 1)
-                  }
-
-                  PanelActionButton {
-                    iconText: sessionRow.modelData.favorite === true ? "★" : "☆"
-                    tooltipText: sessionRow.modelData.favorite === true
+                    iconText: sessionRow.displayFavorite ? "★" : "☆"
+                    tooltipText: sessionRow.displayFavorite
                       ? "Remove favorite (f)"
                       : "Add favorite (f)"
-                    foreground: sessionRow.modelData.favorite === true ? root.foreground : root.dim
+                    foreground: sessionRow.displayFavorite ? root.foreground : root.dim
                     hoverColor: root.foreground
                     fontFamily: root.fontFamily
-                    enabled: !root.actionBusy
                     onClicked: root.toggleFavorite(String(sessionRow.modelData.name))
                   }
 
