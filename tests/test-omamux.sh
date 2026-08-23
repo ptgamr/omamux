@@ -163,6 +163,25 @@ esac
 TMUX
 chmod +x "$FAKE_TMUX"
 
+dependency_state_file="$XDG_STATE_HOME/omamux/favorites.json"
+no_timeout_bin="$TEST_ROOT/no-timeout-bin"
+mkdir -p "$(dirname -- "$dependency_state_file")" "$no_timeout_bin"
+mkfifo "$dependency_state_file"
+ln -s "$(command -v bash)" "$no_timeout_bin/bash"
+ln -s "$(command -v jq)" "$no_timeout_bin/jq"
+if no_timeout_output=$(/usr/bin/timeout 2 /usr/bin/env \
+    PATH="$no_timeout_bin" "$OMAMUX" list); then
+  fail "a missing timeout dependency should be rejected"
+else
+  no_timeout_status=$?
+fi
+[[ $no_timeout_status == 127 ]] \
+  || fail "a missing timeout dependency should exit 127, got $no_timeout_status"
+assert_json "$no_timeout_output" \
+  '.ok == false and (.error | contains("GNU timeout is required"))' \
+  "a missing timeout dependency should fail before opening blocking state"
+rm -f "$dependency_state_file"
+
 empty=$($OMAMUX list)
 assert_json "$empty" '.ok and .tmux.available and (.sessions | length == 0)' \
   "list should treat a missing tmux server as an empty list"

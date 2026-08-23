@@ -41,6 +41,7 @@ The demo shows session navigation, favorites, reordering, and inline session ren
 - tmux
 - Bash
 - jq
+- GNU coreutils (`timeout`)
 
 Omamux runs with your normal user permissions. It does not install packages or request elevated privileges.
 

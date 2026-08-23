@@ -53,6 +53,11 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 127
 fi
 
+if ! command -v timeout >/dev/null 2>&1; then
+  plain_json_error "GNU timeout is required by Omamux"
+  exit 127
+fi
+
 json_error() {
   jq -cn --arg error "${1:-Omamux failed}" '{ok: false, error: $error}'
 }
@@ -359,13 +364,9 @@ empty_state() {
 # Opening a FIFO for reading blocks until a writer appears, so the open itself
 # is time-bounded rather than merely checked.
 state_file_reader() {
-  local -a limiter=()
-  command -v timeout >/dev/null 2>&1 \
-    && limiter=(timeout -s TERM "$MAX_STATE_READ_SECONDS")
-
   # The open is the only pathname lookup on the success path; a missing file is
   # distinguished afterwards, where the answer only selects an error message.
-  "${limiter[@]}" bash -c '
+  timeout -s TERM "$MAX_STATE_READ_SECONDS" bash -c '
     exec {fd}<"$1" 2>/dev/null || { [[ -e $1 ]] && exit 1 || exit "$2"; }
     [[ -f /dev/fd/$fd ]] || exit "$3"
     exec cat <&"$fd"
