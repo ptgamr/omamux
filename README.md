@@ -8,17 +8,18 @@ Version `0.1.0` is intentionally local-only. Remote host support is planned afte
 
 https://github.com/user-attachments/assets/1808ea97-7fc0-4d30-8184-f7d6d5a5dbf4
 
-What's in the demo: session navigation, favorites, reordering, and inline rename session
+The demo shows session navigation, favorites, reordering, and inline session renaming.
 
-## Hotkeys
+## Quick controls
 
-- j/k: change focus
-- f: mark session as favorite
-- shift j/k: re-order favorites
-- r: rename
-- c: create new session
-- enter: launch that session (if already attached in a workspace, it'll focus to that window/workspace instead)
-
+- `j`/`k`: move the selection.
+- `f`: toggle the selected session as a favorite.
+- `J`/`K` (`Shift+j`/`Shift+k`): reorder a favorite.
+- `r`: rename the selected session.
+- `R` (`Shift+r`): refresh sessions.
+- `C` (`Shift+c`): create a session.
+- Right/Left: open session details or return to the session list.
+- Enter: attach to the selection, or focus its existing local window and workspace.
 
 ## Features
 
