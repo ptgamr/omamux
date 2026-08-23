@@ -22,8 +22,12 @@ assert.equal(model.suggestSessionName([]), "main")
 assert.equal(model.suggestSessionName([{ name: "main" }, { name: "main-2" }]), "main-3")
 assert.equal(model.formatAge(100, 100 * 1000 + 30 * 1000), "<1m old")
 assert.equal(model.formatAge(100, 100 * 1000 + 3 * 3600 * 1000), "3h old")
-assert.equal(model.clientLabel(0), "available")
+assert.equal(model.clientLabel(0), "")
 assert.equal(model.clientLabel(2), "2 clients")
+assert.equal(
+  model.sessionMeta({ windows: 2, createdAt: 100, attachedClients: 0 }, 100 * 1000 + 24 * 3600 * 1000),
+  "2 windows · 1d old",
+)
 assert.equal(model.movedSelection(0, 3, 1, false), 0)
 assert.equal(model.movedSelection(0, 3, -1, false), 2)
 assert.equal(model.movedSelection(0, 3, 1, true), 1)
@@ -53,6 +57,31 @@ assert.equal(detail.ok, true)
 assert.equal(detail.session, "main")
 assert.equal(detail.windows[0].panes[0].command, "zsh")
 assert.equal(model.parseDetailPayload("not json").ok, false)
+assert.deepEqual(
+  JSON.parse(JSON.stringify(model.detailRows([
+    {
+      index: 0,
+      name: "editor",
+      panes: [
+        { index: 0, command: "zsh" },
+        { index: 1, command: "nvim" },
+      ],
+    },
+    { index: 1, name: "server", panes: [{ index: 0, command: "node" }] },
+  ]).map((row) => ({
+    kind: row.kind,
+    window: row.window.index,
+    pane: row.pane ? row.pane.index : null,
+    lastPane: row.lastPane === true,
+  })))),
+  [
+    { kind: "window", window: 0, pane: null, lastPane: false },
+    { kind: "pane", window: 0, pane: 0, lastPane: false },
+    { kind: "pane", window: 0, pane: 1, lastPane: true },
+    { kind: "window", window: 1, pane: null, lastPane: false },
+    { kind: "pane", window: 1, pane: 0, lastPane: true },
+  ],
+)
 
 assert.equal(
   JSON.stringify(model.favoriteOrder([

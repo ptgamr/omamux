@@ -27,6 +27,8 @@ Panel {
   property bool showingDetail: false
   property string detailSessionName: ""
   property var detailWindows: []
+  property int selectedDetailIndex: -1
+  property bool detailCursorActive: false
   property string detailError: ""
   property string actionKind: ""
   property string actionError: ""
@@ -71,6 +73,16 @@ Panel {
       count += panes.length
     }
     return count
+  }
+  readonly property var detailRows: Model.detailRows(detailWindows)
+  readonly property int detailWindowRowHeight: Style.space(34)
+  readonly property int detailPaneRowHeight: Style.space(42)
+  readonly property int detailRowSpacing: Style.space(2)
+  readonly property int detailListHeight: {
+    var height = Math.max(0, detailRows.length - 1) * detailRowSpacing
+    for (var i = 0; i < detailRows.length; i++)
+      height += detailRows[i].kind === "window" ? detailWindowRowHeight : detailPaneRowHeight
+    return Math.min(Style.space(360), height)
   }
   readonly property int sessionRowHeight: Style.space(44)
   readonly property int sessionRowSpacing: Style.space(4)
@@ -136,6 +148,27 @@ Panel {
     revealSelection()
   }
 
+  function moveDetailSelection(delta) {
+    if (!showingDetail || detailRows.length === 0 || interactionBusy) return
+    selectedDetailIndex = Model.movedSelection(
+      selectedDetailIndex, detailRows.length, delta, detailCursorActive)
+    detailCursorActive = true
+    revealDetailSelection()
+  }
+
+  function revealDetailSelection() {
+    if (selectedDetailIndex >= 0 && detailList)
+      Qt.callLater(function() {
+        detailList.positionViewAtIndex(selectedDetailIndex, ListView.Contain)
+      })
+  }
+
+  function selectDetailRow(index) {
+    if (!showingDetail || interactionBusy) return
+    detailCursorActive = true
+    selectedDetailIndex = Model.clampedIndex(index, detailRows.length)
+  }
+
   function activateSelected() {
     if (interactionBusy) return
     if (showingDetail) {
@@ -193,10 +226,12 @@ Panel {
 
   function openSessionDetail(name) {
     if (interactionBusy || detailLoading || !hostWidget || name === "") return
-    cancelCreate()
+    cancelNameEdit()
     showingDetail = true
     detailSessionName = name
     detailWindows = []
+    selectedDetailIndex = -1
+    detailCursorActive = false
     detailError = ""
     detailProcess.command = [hostWidget.backendPath, "detail", name]
     detailProcess.running = true
@@ -214,6 +249,8 @@ Panel {
     showingDetail = false
     detailSessionName = ""
     detailWindows = []
+    selectedDetailIndex = -1
+    detailCursorActive = false
     detailError = ""
     revealSelection()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
@@ -224,9 +261,13 @@ Panel {
     if (result.ok) {
       detailSessionName = result.session
       detailWindows = result.windows
+      selectedDetailIndex = detailRows.length > 0 ? 0 : -1
+      detailCursorActive = false
       detailError = ""
     } else {
       detailWindows = []
+      selectedDetailIndex = -1
+      detailCursorActive = false
       detailError = result.error
     }
   }
@@ -471,6 +512,8 @@ Panel {
       showingDetail = false
       detailSessionName = ""
       detailWindows = []
+      selectedDetailIndex = -1
+      detailCursorActive = false
       detailError = ""
     }
   }
@@ -558,7 +601,10 @@ Panel {
       blocked: root.editingName
 
       onMoveRequested: function(dx, dy) {
-        if (dy !== 0) root.moveSelection(dy)
+        if (dy !== 0) {
+          if (root.showingDetail) root.moveDetailSelection(dy)
+          else root.moveSelection(dy)
+        }
         if (dx > 0) root.openSelectedDetail()
         if (dx < 0) root.closeSessionDetail()
       }
@@ -1067,132 +1113,113 @@ Panel {
             }
           }
 
-          Flickable {
-            id: detailFlick
+          ListView {
+            id: detailList
             visible: !root.detailLoading && root.detailError === "" && root.detailWindows.length > 0
             width: parent.width
-            implicitHeight: Math.min(Style.space(360), detailRows.implicitHeight)
+            implicitHeight: root.detailListHeight
             height: implicitHeight
-            contentWidth: width
-            contentHeight: detailRows.implicitHeight
+            model: root.detailRows
+            spacing: root.detailRowSpacing
             clip: true
             boundsBehavior: Flickable.StopAtBounds
+            currentIndex: root.selectedDetailIndex
             ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
-            Column {
-              id: detailRows
-              width: detailFlick.width
-              spacing: Style.space(8)
+            delegate: CursorSurface {
+              id: detailTreeRow
+              required property var modelData
+              required property int index
+              readonly property bool isWindow: modelData.kind === "window"
+              readonly property var windowData: modelData.window || ({})
+              readonly property var paneData: modelData.pane || ({})
+              readonly property bool isActive: isWindow
+                ? windowData.active === true
+                : paneData.active === true
 
-              Repeater {
-                model: root.detailWindows
+              width: detailList.width
+              height: isWindow ? root.detailWindowRowHeight : root.detailPaneRowHeight
+              hasCursor: root.detailCursorActive && index === root.selectedDetailIndex
+              current: isActive
+              foreground: root.foreground
+              accent: Color.accent
 
-                delegate: Column {
-                  id: windowBlock
-                  required property var modelData
-                  required property int index
-                  width: detailRows.width
-                  spacing: Style.space(4)
+              MouseArea {
+                anchors.fill: parent
+                hoverEnabled: true
+                enabled: !root.interactionBusy
+                cursorShape: Qt.PointingHandCursor
+                onEntered: root.selectDetailRow(detailTreeRow.index)
+                onClicked: root.selectDetailRow(detailTreeRow.index)
+              }
 
-                  Item {
+              Row {
+                anchors.fill: parent
+                anchors.leftMargin: detailTreeRow.isWindow ? Style.space(6) : Style.space(18)
+                anchors.rightMargin: Style.space(6)
+                spacing: Style.space(7)
+
+                Text {
+                  id: treeBranch
+                  width: Style.space(12)
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: detailTreeRow.isWindow
+                    ? "▾"
+                    : (detailTreeRow.modelData.lastPane === true ? "└" : "├")
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.body
+                  horizontalAlignment: Text.AlignHCenter
+                }
+
+                Column {
+                  width: Math.max(0, parent.width - treeBranch.width
+                    - activeDetailLabel.width - parent.spacing * 2)
+                  anchors.verticalCenter: parent.verticalCenter
+                  spacing: Style.space(1)
+
+                  Text {
                     width: parent.width
-                    height: Style.space(28)
-
-                    Text {
-                      anchors.left: parent.left
-                      anchors.leftMargin: Style.space(6)
-                      anchors.verticalCenter: parent.verticalCenter
-                      text: windowBlock.modelData.index + ": "
-                        + String(windowBlock.modelData.name || "window")
-                      color: root.foreground
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.body
-                      font.bold: true
-                    }
-
-                    Text {
-                      visible: windowBlock.modelData.active === true
-                      anchors.right: parent.right
-                      anchors.rightMargin: Style.space(6)
-                      anchors.verticalCenter: parent.verticalCenter
-                      text: "ACTIVE"
-                      color: root.dim
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.caption
-                      font.bold: true
-                    }
+                    text: detailTreeRow.isWindow
+                      ? String(detailTreeRow.windowData.index) + ": "
+                        + String(detailTreeRow.windowData.name || "window")
+                      : String(detailTreeRow.paneData.index) + " · "
+                        + String(detailTreeRow.paneData.command || "pane")
+                        + (String(detailTreeRow.paneData.title || "") !== ""
+                          ? " · " + String(detailTreeRow.paneData.title)
+                          : "")
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.body
+                    font.bold: detailTreeRow.isWindow || detailTreeRow.isActive
+                    elide: Text.ElideRight
                   }
 
-                  Repeater {
-                    model: Array.isArray(windowBlock.modelData.panes)
-                      ? windowBlock.modelData.panes
-                      : []
-
-                    delegate: BorderSurface {
-                      id: paneRow
-                      required property var modelData
-                      width: windowBlock.width
-                      height: Style.space(42)
-                      radius: Style.cornerRadius
-                      color: paneRow.modelData.active === true
-                        ? Style.selectedFillFor(root.foreground, Color.accent)
-                        : "transparent"
-                      borderSpec: paneRow.modelData.active === true
-                        ? Border.controlSpec("selected", root.foreground, Color.accent)
-                        : Border.none()
-
-                      Column {
-                        anchors.left: parent.left
-                        anchors.right: activePaneLabel.left
-                        anchors.verticalCenter: parent.verticalCenter
-                        anchors.leftMargin: Style.space(8)
-                        anchors.rightMargin: Style.space(8)
-                        spacing: Style.space(2)
-
-                        Text {
-                          width: parent.width
-                          text: paneRow.modelData.index + " · "
-                            + String(paneRow.modelData.command || "pane")
-                            + (String(paneRow.modelData.title || "") !== ""
-                              ? " · " + String(paneRow.modelData.title)
-                              : "")
-                          color: root.foreground
-                          font.family: root.fontFamily
-                          font.pixelSize: Style.font.body
-                          font.bold: paneRow.modelData.active === true
-                          elide: Text.ElideRight
-                        }
-
-                        Text {
-                          width: parent.width
-                          text: String(paneRow.modelData.path || "")
-                          color: root.dim
-                          font.family: root.fontFamily
-                          font.pixelSize: Style.font.caption
-                          elide: Text.ElideMiddle
-                        }
-                      }
-
-                      Text {
-                        id: activePaneLabel
-                        visible: paneRow.modelData.active === true
-                        anchors.right: parent.right
-                        anchors.rightMargin: Style.space(8)
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: "ACTIVE"
-                        color: root.foreground
-                        font.family: root.fontFamily
-                        font.pixelSize: Style.font.caption
-                        font.bold: true
-                      }
-                    }
-                  }
-
-                  PanelSeparator {
-                    visible: windowBlock.index < root.detailWindows.length - 1
+                  Text {
+                    visible: !detailTreeRow.isWindow
                     width: parent.width
-                    foreground: root.foreground
+                    text: String(detailTreeRow.paneData.path || "")
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    elide: Text.ElideMiddle
                   }
+                }
+
+                Text {
+                  id: activeDetailLabel
+                  visible: detailTreeRow.isWindow || detailTreeRow.isActive
+                  width: visible ? implicitWidth : 0
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: detailTreeRow.isWindow
+                    ? detailTreeRow.modelData.paneCount + " PANE"
+                      + (detailTreeRow.modelData.paneCount === 1 ? "" : "S")
+                      + (detailTreeRow.isActive ? " · ACTIVE" : "")
+                    : "ACTIVE"
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
                 }
               }
             }
@@ -1215,7 +1242,7 @@ Panel {
         Text {
           visible: root.showingDetail
           width: parent.width
-          text: "← back · Enter attach"
+          text: "j/k select · ← sessions · Enter attach session"
           color: root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption

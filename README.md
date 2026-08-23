@@ -44,7 +44,7 @@ omarchy bar move io.github.ptgamr.omamux --section right
 - Use `j`/`k` or the arrow keys to select a session, then press Enter to attach.
 - Click `☆`/`★`, or press `f`, to toggle a favorite.
 - Drag a favorite row, or press `Shift+j`/`Shift+k`, to reorder it.
-- Press Right to inspect a session's windows and panes, then Left to go back.
+- Press Right to inspect a session's window-and-pane tree, use `j`/`k` to select either level, then Left to go back.
 - Click `+`, or press `Shift+C`, to create a session.
 - Press `r` to rename the selected session, then Enter to confirm or Escape to cancel.
 - Press `Shift+R`, use the refresh button in the panel header, or right-click the bar widget, to refresh.

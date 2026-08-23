@@ -61,6 +61,25 @@ function parseDetailPayload(raw) {
   }
 }
 
+function detailRows(windows) {
+  var values = Array.isArray(windows) ? windows : []
+  var rows = []
+  for (var i = 0; i < values.length; i++) {
+    var window = values[i] || ({})
+    var panes = Array.isArray(window.panes) ? window.panes : []
+    rows.push({ kind: "window", window: window, paneCount: panes.length })
+    for (var j = 0; j < panes.length; j++) {
+      rows.push({
+        kind: "pane",
+        window: window,
+        pane: panes[j] || ({}),
+        lastPane: j === panes.length - 1
+      })
+    }
+  }
+  return rows
+}
+
 function validationError(value) {
   var name = String(value || "").trim()
   if (name === "") return "Enter a session name"
@@ -119,15 +138,16 @@ function formatAge(createdAt, nowMs) {
 
 function clientLabel(attachedClients) {
   var count = Number(attachedClients || 0)
-  if (count === 0) return "available"
+  if (count === 0) return ""
   return plural(count, "client")
 }
 
 function sessionMeta(session, nowMs) {
   if (!session) return ""
-  return plural(session.windows, "window")
+  var meta = plural(session.windows, "window")
     + " · " + formatAge(session.createdAt, nowMs)
-    + " · " + clientLabel(session.attachedClients)
+  var clients = clientLabel(session.attachedClients)
+  return clients === "" ? meta : meta + " · " + clients
 }
 
 function clampedIndex(index, count) {
