@@ -7,6 +7,30 @@ readonly STATE_ROOT="${XDG_STATE_HOME:-${HOME}/.local/state}/omamux"
 readonly STATE_FILE="${OMAMUX_STATE_FILE:-${STATE_ROOT}/favorites.json}"
 readonly TMUX_BIN="${OMAMUX_TMUX_BIN:-tmux}"
 readonly HYPRCTL_BIN="${OMAMUX_HYPRCTL_BIN:-hyprctl}"
+readonly INPUT_OVERFLOW_STATUS=90
+readonly MAX_STATE_BYTES=$((256 * 1024))
+readonly MAX_HYPR_CLIENT_BYTES=$((2 * 1024 * 1024))
+readonly MAX_TMUX_CLIENT_BYTES=$((512 * 1024))
+readonly MAX_TMUX_SESSION_BYTES=$((512 * 1024))
+readonly MAX_TMUX_PANE_BYTES=$((2 * 1024 * 1024))
+readonly MAX_FAVORITES=256
+readonly MAX_HYPR_CLIENTS=1024
+readonly MAX_TMUX_CLIENTS=1024
+readonly MAX_TMUX_SESSIONS=512
+readonly MAX_TMUX_PANES=2048
+readonly MAX_SESSION_NAME_BYTES=256
+readonly MAX_WINDOW_NAME_BYTES=512
+readonly MAX_PANE_TITLE_BYTES=1024
+readonly MAX_PANE_COMMAND_BYTES=256
+readonly MAX_PANE_PATH_BYTES=4096
+readonly MAX_HYPR_ADDRESS_BYTES=64
+readonly MAX_HYPR_CLASS_BYTES=256
+readonly MAX_HYPR_TITLE_BYTES=1024
+readonly MAX_WORKSPACE_NAME_BYTES=256
+readonly MAX_COMMAND_ERROR_BYTES=512
+readonly MAX_TMUX_COMMAND_BYTES=$((64 * 1024))
+readonly MAX_HOSTNAME_BYTES=255
+readonly MAX_TMUX_VERSION_BYTES=128
 
 TMUX_ARGS=()
 if [[ -n ${OMAMUX_TMUX_SOCKET:-} ]]; then
@@ -33,6 +57,52 @@ json_error() {
 fail() {
   json_error "$1"
   exit "${2:-1}"
+}
+
+# Keep external producer output out of unbounded shell variables. The producer
+# is stopped after limit + 1 bytes, which lets callers reject overflow before
+# passing any of the data to jq or row parsers.
+bounded_command_output() {
+  local destination=$1 limit=$2
+  shift 2
+  local -n destination_ref=$destination
+  local tmp byte_count command_status limiter_status had_errexit=0
+  local -a pipeline_status
+
+  destination_ref=''
+  tmp=$(mktemp "${TMPDIR:-/tmp}/omamux.capture.XXXXXX") || return 1
+  [[ $- == *e* ]] && had_errexit=1
+  set +e
+  "$@" 2>&1 | LC_ALL=C head -c "$((limit + 1))" >"$tmp"
+  pipeline_status=("${PIPESTATUS[@]}")
+  (( had_errexit == 0 )) || set -e
+
+  command_status=${pipeline_status[0]:-1}
+  limiter_status=${pipeline_status[1]:-1}
+  byte_count=$(LC_ALL=C wc -c <"$tmp")
+  if (( byte_count > limit )); then
+    rm -f -- "$tmp"
+    return "$INPUT_OVERFLOW_STATUS"
+  fi
+  if (( limiter_status != 0 )); then
+    rm -f -- "$tmp"
+    return "$limiter_status"
+  fi
+
+  destination_ref=$(<"$tmp")
+  rm -f -- "$tmp"
+  return "$command_status"
+}
+
+command_error_excerpt() {
+  local destination=$1 value=$2
+  local -n destination_ref=$destination
+  LC_ALL=C printf -v destination_ref '%.*s' "$MAX_COMMAND_ERROR_BYTES" "$value"
+}
+
+string_fits() {
+  local value=$1 limit=$2
+  (( $(LC_ALL=C printf '%s' "$value" | wc -c) <= limit ))
 }
 
 # Capture JSON-producing helpers without swallowing their structured failure
@@ -63,6 +133,18 @@ tmux_command() {
   "$TMUX_BIN" "${TMUX_ARGS[@]}" "$@"
 }
 
+tmux_command_quiet() {
+  tmux_command "$@" 2>/dev/null
+}
+
+hostname_command() {
+  hostname 2>/dev/null
+}
+
+hypr_clients_command() {
+  "$HYPRCTL_BIN" clients -j 2>/dev/null
+}
+
 process_parent() {
   local pid=$1 key value
   [[ -r /proc/$pid/status ]] || return 1
@@ -76,10 +158,54 @@ process_parent() {
 }
 
 hypr_clients_json() {
-  local clients
+  local clients status
   command -v "$HYPRCTL_BIN" >/dev/null 2>&1 || return 1
-  clients=$($HYPRCTL_BIN clients -j 2>/dev/null) || return 1
-  jq -ce 'select(type == "array")' <<<"$clients" 2>/dev/null
+  if bounded_command_output clients "$MAX_HYPR_CLIENT_BYTES" \
+      hypr_clients_command; then
+    :
+  else
+    status=$?
+    (( status == INPUT_OVERFLOW_STATUS )) && return "$status"
+    return 1
+  fi
+
+  jq -e '
+    type == "array"
+    and all(.[];
+      type == "object"
+      and (.pid | type) == "number"
+      and (.address | type) == "string"
+      and ((.class == null) or ((.class | type) == "string"))
+      and ((.title == null) or ((.title | type) == "string"))
+      and ((.workspace == null) or ((.workspace | type) == "object"))
+      and ((.workspace.id == null) or ((.workspace.id | type) == "number"))
+      and ((.workspace.name == null) or ((.workspace.name | type) == "string")))
+  ' <<<"$clients" >/dev/null 2>&1 || return 1
+
+  jq -e \
+    --argjson maxRows "$MAX_HYPR_CLIENTS" \
+    --argjson maxAddress "$MAX_HYPR_ADDRESS_BYTES" \
+    --argjson maxClass "$MAX_HYPR_CLASS_BYTES" \
+    --argjson maxTitle "$MAX_HYPR_TITLE_BYTES" \
+    --argjson maxWorkspace "$MAX_WORKSPACE_NAME_BYTES" '
+      length <= $maxRows
+      and all(.[];
+        (.address | utf8bytelength) <= $maxAddress
+        and ((.class // "") | utf8bytelength) <= $maxClass
+        and ((.title // "") | utf8bytelength) <= $maxTitle
+        and ((.workspace.name // "") | utf8bytelength) <= $maxWorkspace)
+    ' <<<"$clients" >/dev/null 2>&1 || return "$INPUT_OVERFLOW_STATUS"
+
+  jq -ce 'map({
+    address,
+    pid,
+    class: (.class // ""),
+    title: (.title // ""),
+    workspace: {
+      id: (.workspace.id // null),
+      name: (.workspace.name // "")
+    }
+  })' <<<"$clients" 2>/dev/null
 }
 
 hypr_window_for_process_json() {
@@ -107,10 +233,40 @@ hypr_window_for_process_json() {
 }
 
 local_desktop_client_json() {
-  local name=$1 hypr_clients clients activity pid match
-  hypr_clients=$(hypr_clients_json) || return 1
-  clients=$(tmux_command list-clients -t "=$name" \
-    -F $'#{client_activity}\t#{client_pid}' 2>/dev/null) || return 1
+  local name=$1 hypr_clients clients activity pid match status
+  if hypr_clients=$(hypr_clients_json); then
+    :
+  else
+    status=$?
+    (( status == INPUT_OVERFLOW_STATUS )) && return "$status"
+    return 1
+  fi
+  if bounded_command_output clients "$MAX_TMUX_CLIENT_BYTES" \
+      tmux_command_quiet list-clients -t "=$name" \
+      -F $'#{client_activity}\t#{client_pid}'; then
+    :
+  else
+    status=$?
+    (( status == INPUT_OVERFLOW_STATUS )) && return "$status"
+    return 1
+  fi
+
+  jq -Rse '
+    split("\n") | map(select(length > 0))
+    | all(.[];
+        split("\t") as $fields
+        | ($fields | length) == 2
+          and ($fields[0] | test("^[0-9]+$"))
+          and ($fields[1] | test("^[0-9]+$")))
+  ' <<<"$clients" >/dev/null 2>&1 || return 1
+  jq -Rse --argjson maxRows "$MAX_TMUX_CLIENTS" '
+    split("\n") | map(select(length > 0))
+    | length <= $maxRows
+      and all(.[];
+        split("\t")
+        | (.[0] | utf8bytelength) <= 20
+          and (.[1] | utf8bytelength) <= 20)
+  ' <<<"$clients" >/dev/null 2>&1 || return "$INPUT_OVERFLOW_STATUS"
 
   while IFS=$'\t' read -r activity pid; do
     [[ $pid =~ ^[0-9]+$ ]] || continue
@@ -124,11 +280,46 @@ local_desktop_client_json() {
 }
 
 local_desktop_sessions_json() {
-  local hypr_clients clients name activity pid match desktops='{}'
-  hypr_clients=$(hypr_clients_json) || { printf '{}\n'; return; }
-  clients=$(tmux_command list-clients \
-    -F $'#{session_name}\t#{client_activity}\t#{client_pid}' 2>/dev/null) \
-    || { printf '{}\n'; return; }
+  local hypr_clients clients name activity pid match status desktops='{}'
+  if hypr_clients=$(hypr_clients_json); then
+    :
+  else
+    status=$?
+    (( status == INPUT_OVERFLOW_STATUS )) && return "$status"
+    printf '{}\n'
+    return
+  fi
+  if bounded_command_output clients "$MAX_TMUX_CLIENT_BYTES" \
+      tmux_command_quiet list-clients \
+      -F $'#{session_name}\t#{client_activity}\t#{client_pid}'; then
+    :
+  else
+    status=$?
+    (( status == INPUT_OVERFLOW_STATUS )) && return "$status"
+    printf '{}\n'
+    return
+  fi
+
+  jq -Rse '
+    split("\n") | map(select(length > 0))
+    | all(.[];
+        split("\t") as $fields
+        | ($fields | length) == 3
+          and ($fields[0] | length) > 0
+          and ($fields[1] | test("^[0-9]+$"))
+          and ($fields[2] | test("^[0-9]+$")))
+  ' <<<"$clients" >/dev/null 2>&1 || { printf '{}\n'; return; }
+  jq -Rse \
+    --argjson maxRows "$MAX_TMUX_CLIENTS" \
+    --argjson maxName "$MAX_SESSION_NAME_BYTES" '
+      split("\n") | map(select(length > 0))
+      | length <= $maxRows
+        and all(.[];
+          split("\t")
+          | (.[0] | utf8bytelength) <= $maxName
+            and (.[1] | utf8bytelength) <= 20
+            and (.[2] | utf8bytelength) <= 20)
+    ' <<<"$clients" >/dev/null 2>&1 || return "$INPUT_OVERFLOW_STATUS"
 
   while IFS=$'\t' read -r name activity pid; do
     [[ -n $name && $pid =~ ^[0-9]+$ ]] || continue
@@ -160,23 +351,40 @@ empty_state() {
 }
 
 read_state() {
+  local state status
   if [[ ! -e $STATE_FILE ]]; then
     empty_state
     return
   fi
 
   [[ -f $STATE_FILE ]] || fail "Omamux state path is not a regular file: $STATE_FILE"
-  jq -ce --arg host "$HOST_ID" '
+  if bounded_command_output state "$MAX_STATE_BYTES" \
+      head -c "$((MAX_STATE_BYTES + 1))" -- "$STATE_FILE"; then
+    :
+  else
+    status=$?
+    if (( status == INPUT_OVERFLOW_STATUS )); then
+      fail "Omamux state exceeds the $MAX_STATE_BYTES-byte safety limit: $STATE_FILE"
+    fi
+    fail "Unable to read Omamux state: $STATE_FILE"
+  fi
+
+  jq -ce \
+    --arg host "$HOST_ID" \
+    --argjson maxFavorites "$MAX_FAVORITES" \
+    --argjson maxName "$MAX_SESSION_NAME_BYTES" '
     select(.schemaVersion == 1)
     | select((.hosts | type) == "object")
     | select((.hosts[$host] | type) == "object")
     | select((.hosts[$host].favorites | type) == "array")
+    | select((.hosts[$host].favorites | length) <= $maxFavorites)
     | select(all(.hosts[$host].favorites[];
         (.name | type) == "string"
         and (.name | length) > 0
+        and (.name | utf8bytelength) <= $maxName
         and (.starredAt | type) == "number"))
-  ' "$STATE_FILE" 2>/dev/null \
-    || fail "Omamux state is malformed; fix or move $STATE_FILE and retry"
+  ' <<<"$state" 2>/dev/null \
+    || fail "Omamux state is malformed or exceeds safety limits; fix or move $STATE_FILE and retry"
 }
 
 state_favorites() {
@@ -191,6 +399,8 @@ write_favorites() {
   capture_json state read_state
   next=$(jq -c --arg host "$HOST_ID" --argjson favorites "$favorites" \
     '.hosts[$host].favorites = $favorites' <<<"$state")
+  string_fits "$next" "$MAX_STATE_BYTES" \
+    || fail "Omamux state would exceed the $MAX_STATE_BYTES-byte safety limit"
 
   state_dir=$(dirname -- "$STATE_FILE")
   mkdir -p -- "$state_dir"
@@ -203,6 +413,8 @@ write_favorites() {
 validate_session_name() {
   local name=${1:-}
   [[ -n $name ]] || fail "Session name cannot be empty"
+  string_fits "$name" "$MAX_SESSION_NAME_BYTES" \
+    || fail "Session names cannot exceed $MAX_SESSION_NAME_BYTES bytes"
   [[ $name != *.* && $name != *:* ]] \
     || fail "Session names cannot contain '.' or ':'"
   [[ ! $name =~ [[:cntrl:]] ]] \
@@ -210,15 +422,23 @@ validate_session_name() {
 }
 
 list_sessions_json() {
-  local output
-  if ! output=$(tmux_command list-sessions \
-      -F $'#{session_name}\t#{session_windows}\t#{session_created}\t#{session_attached}' 2>&1); then
+  local output status excerpt
+  if bounded_command_output output "$MAX_TMUX_SESSION_BYTES" \
+      tmux_command list-sessions \
+      -F $'#{session_name}\t#{session_windows}\t#{session_created}\t#{session_attached}'; then
+    :
+  else
+    status=$?
+    if (( status == INPUT_OVERFLOW_STATUS )); then
+      fail "tmux session data exceeds the $MAX_TMUX_SESSION_BYTES-byte safety limit"
+    fi
     if [[ $output == *"no server running"* || $output == *"no sessions"* \
         || $output == *"failed to connect"* || $output == *"error connecting to"* ]]; then
       printf '[]\n'
       return
     fi
-    fail "Unable to list tmux sessions: $output"
+    command_error_excerpt excerpt "$output"
+    fail "Unable to list tmux sessions: $excerpt"
   fi
 
   if [[ -z $output ]]; then
@@ -226,12 +446,21 @@ list_sessions_json() {
     return
   fi
 
-  jq -Rsc '
+  jq -Rsc \
+    --argjson maxRows "$MAX_TMUX_SESSIONS" \
+    --argjson maxName "$MAX_SESSION_NAME_BYTES" '
     split("\n")
     | map(select(length > 0))
+    | if length > $maxRows then error("too many tmux sessions") else . end
     | map(
         split("\t")
         | if length != 4 then error("unexpected tmux list format") else . end
+        | if (.[0] | utf8bytelength) == 0
+            or (.[0] | utf8bytelength) > $maxName
+            or (.[1] | test("^[0-9]{1,20}$") | not)
+            or (.[2] | test("^[0-9]{1,20}$") | not)
+            or (.[3] | test("^[0-9]{1,20}$") | not)
+          then error("tmux session field exceeds limits") else . end
         | {
             name: .[0],
             windows: (.[1] | tonumber),
@@ -244,18 +473,42 @@ list_sessions_json() {
 }
 
 list_session_detail_json() {
-  local name=$1 output
-  if ! output=$(tmux_command list-panes -s -t "=$name" \
-      -F $'#{window_index}\t#{window_name}\t#{window_active}\t#{pane_id}\t#{pane_index}\t#{pane_title}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_active}' 2>&1); then
-    fail "Unable to inspect tmux session '$name': $output"
+  local name=$1 output status excerpt
+  if bounded_command_output output "$MAX_TMUX_PANE_BYTES" \
+      tmux_command list-panes -s -t "=$name" \
+      -F $'#{window_index}\t#{window_name}\t#{window_active}\t#{pane_id}\t#{pane_index}\t#{pane_title}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_active}'; then
+    :
+  else
+    status=$?
+    if (( status == INPUT_OVERFLOW_STATUS )); then
+      fail "tmux pane data exceeds the $MAX_TMUX_PANE_BYTES-byte safety limit"
+    fi
+    command_error_excerpt excerpt "$output"
+    fail "Unable to inspect tmux session '$name': $excerpt"
   fi
 
-  jq -Rsc '
+  jq -Rsc \
+    --argjson maxRows "$MAX_TMUX_PANES" \
+    --argjson maxWindowName "$MAX_WINDOW_NAME_BYTES" \
+    --argjson maxTitle "$MAX_PANE_TITLE_BYTES" \
+    --argjson maxCommand "$MAX_PANE_COMMAND_BYTES" \
+    --argjson maxPath "$MAX_PANE_PATH_BYTES" '
     split("\n")
     | map(select(length > 0))
+    | if length > $maxRows then error("too many tmux panes") else . end
     | map(
         split("\t")
         | if length != 9 then error("unexpected tmux pane format") else . end
+        | if (.[0] | test("^[0-9]{1,20}$") | not)
+            or (.[1] | utf8bytelength) > $maxWindowName
+            or (.[2] | test("^[01]$") | not)
+            or (.[3] | test("^%[0-9]{1,20}$") | not)
+            or (.[4] | test("^[0-9]{1,20}$") | not)
+            or (.[5] | utf8bytelength) > $maxTitle
+            or (.[6] | utf8bytelength) > $maxCommand
+            or (.[7] | utf8bytelength) > $maxPath
+            or (.[8] | test("^[01]$") | not)
+          then error("tmux pane field exceeds limits") else . end
         | {
             windowIndex: (.[0] | tonumber),
             windowName: .[1],
@@ -282,8 +535,15 @@ list_session_detail_json() {
 }
 
 list_command() {
-  local hostname_value favorites sessions desktop_sessions version
-  hostname_value=$(hostname 2>/dev/null || printf 'local')
+  local hostname_value favorites sessions desktop_sessions version status
+  if bounded_command_output hostname_value "$MAX_HOSTNAME_BYTES" hostname_command; then
+    :
+  else
+    status=$?
+    (( status == INPUT_OVERFLOW_STATUS )) \
+      && fail "Hostname exceeds the $MAX_HOSTNAME_BYTES-byte safety limit"
+    hostname_value=local
+  fi
   capture_json favorites state_favorites
 
   if ! tmux_available; then
@@ -314,8 +574,22 @@ list_command() {
   fi
 
   capture_json sessions list_sessions_json
-  desktop_sessions=$(local_desktop_sessions_json)
-  version=$(tmux_command -V 2>/dev/null || true)
+  if desktop_sessions=$(local_desktop_sessions_json); then
+    :
+  else
+    status=$?
+    (( status == INPUT_OVERFLOW_STATUS )) \
+      && fail "Hyprland or tmux client data exceeds Omamux safety limits"
+    desktop_sessions='{}'
+  fi
+  if bounded_command_output version "$MAX_TMUX_VERSION_BYTES" tmux_command_quiet -V; then
+    :
+  else
+    status=$?
+    (( status == INPUT_OVERFLOW_STATUS )) \
+      && fail "tmux version data exceeds the $MAX_TMUX_VERSION_BYTES-byte safety limit"
+    version=''
+  fi
 
   jq -cn \
     --arg host "$HOST_ID" \
@@ -398,7 +672,7 @@ launch_terminal() {
 }
 
 select_attach_target() {
-  local name=$1 window_index=${2:-} pane_id=${3:-} pane_identity
+  local name=$1 window_index=${2:-} pane_id=${3:-} pane_identity status
   [[ -n $window_index ]] || return 0
   [[ $window_index =~ ^[0-9]+$ ]] || fail "Window index must be a non-negative number"
   tmux_command display-message -p -t "=$name:$window_index" '#{window_id}' >/dev/null 2>&1 \
@@ -406,9 +680,16 @@ select_attach_target() {
 
   if [[ -n $pane_id ]]; then
     [[ $pane_id =~ ^%[0-9]+$ ]] || fail "Pane ID is invalid"
-    pane_identity=$(tmux_command display-message -p -t "$pane_id" \
-      $'#{session_name}\t#{window_index}' 2>/dev/null) \
-      || fail "tmux pane '$pane_id' no longer exists"
+    if bounded_command_output pane_identity "$((MAX_SESSION_NAME_BYTES + 32))" \
+        tmux_command_quiet display-message -p -t "$pane_id" \
+        $'#{session_name}\t#{window_index}'; then
+      :
+    else
+      status=$?
+      (( status == INPUT_OVERFLOW_STATUS )) \
+        && fail "tmux pane identity exceeds Omamux safety limits"
+      fail "tmux pane '$pane_id' no longer exists"
+    fi
     [[ $pane_identity == "$name"$'\t'"$window_index" ]] \
       || fail "tmux pane '$pane_id' is not in '$name:$window_index'"
   fi
@@ -423,7 +704,7 @@ select_attach_target() {
 
 attach_command() {
   local name=${1:-} window_index=${2:-} pane_id=${3:-}
-  local desktop address
+  local desktop address status
   validate_session_name "$name"
   tmux_available || fail "tmux is not installed"
   tmux_command has-session -t "=$name" 2>/dev/null \
@@ -438,6 +719,10 @@ attach_command() {
         '{ok: true, action: "focus", session: $name, window: $window}'
       return
     fi
+  else
+    status=$?
+    (( status == INPUT_OVERFLOW_STATUS )) \
+      && fail "Hyprland or tmux client data exceeds Omamux safety limits"
   fi
 
   launch_terminal "$name" attach-session
@@ -461,7 +746,7 @@ create_command() {
 
 rename_command() {
   local old_name=${1:-} new_name=${2:-}
-  local favorites next output
+  local favorites next output status excerpt
   validate_session_name "$old_name"
   validate_session_name "$new_name"
   tmux_available || fail "tmux is not installed"
@@ -483,8 +768,15 @@ rename_command() {
     map(if .name == $old then .name = $new else . end)
   ' <<<"$favorites")
 
-  if ! output=$(tmux_command rename-session -t "=$old_name" "$new_name" 2>&1); then
-    fail "Unable to rename tmux session '$old_name': $output"
+  if bounded_command_output output "$MAX_TMUX_COMMAND_BYTES" \
+      tmux_command rename-session -t "=$old_name" "$new_name"; then
+    :
+  else
+    status=$?
+    (( status == INPUT_OVERFLOW_STATUS )) \
+      && fail "tmux rename output exceeds the $MAX_TMUX_COMMAND_BYTES-byte safety limit"
+    command_error_excerpt excerpt "$output"
+    fail "Unable to rename tmux session '$old_name': $excerpt"
   fi
 
   if jq -e --arg old "$old_name" 'any(.[]; .name == $old)' <<<"$favorites" >/dev/null; then
@@ -509,6 +801,9 @@ favorite_toggle_command() {
       [{name: $name, starredAt: $at}] + .
     end
   ' <<<"$favorites")
+  jq -e --argjson maxFavorites "$MAX_FAVORITES" \
+    'length <= $maxFavorites' <<<"$next" >/dev/null \
+    || fail "Omamux supports at most $MAX_FAVORITES favorites"
   write_favorites "$next"
   favorite=$(jq -cn --arg name "$name" --argjson favorites "$next" \
     'any($favorites[]; .name == $name)')
@@ -518,6 +813,8 @@ favorite_toggle_command() {
 
 favorite_reorder_command() {
   (( $# > 0 )) || fail "Favorite reorder requires at least one session name"
+  (( $# <= MAX_FAVORITES )) \
+    || fail "Favorite reorder cannot exceed $MAX_FAVORITES session names"
 
   local name existing favorites names next
   local -a seen_names=()

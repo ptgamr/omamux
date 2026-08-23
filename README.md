@@ -126,4 +126,6 @@ Removing the plugin does not remove its favorites file.
 
 Omamux does not edit `.tmux.conf`, Omarchy configuration, terminal configuration, tmux global/server options, colors, or theme synchronization. Session names are passed as command arguments rather than interpolated into shell command strings, and existing sessions are addressed with exact tmux targets.
 
+State, Hyprland client data, and tmux client/session/pane data are captured with fixed byte ceilings before parsing. Omamux also limits row counts and retained field lengths; oversized input is rejected with a structured error instead of being forwarded to QML.
+
 See [PLAN.md](PLAN.md) for the full local-first design and the later remote-host direction.
