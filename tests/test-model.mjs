@@ -35,6 +35,16 @@ assert.equal(parsed.host.name, "arch")
 assert.equal(parsed.sessions[0].name, "main")
 assert.equal(model.parseListPayload("not json").ok, false)
 
+const detail = model.parseDetailPayload(JSON.stringify({
+  ok: true,
+  session: "main",
+  windows: [{ index: 0, name: "shell", panes: [{ index: 0, command: "zsh" }] }],
+}))
+assert.equal(detail.ok, true)
+assert.equal(detail.session, "main")
+assert.equal(detail.windows[0].panes[0].command, "zsh")
+assert.equal(model.parseDetailPayload("not json").ok, false)
+
 assert.equal(
   JSON.stringify(model.favoriteOrder([
     { name: "one", favorite: true },

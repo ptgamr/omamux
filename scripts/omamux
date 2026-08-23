@@ -150,6 +150,44 @@ list_sessions_json() {
     || fail "Unable to parse tmux session data"
 }
 
+list_session_detail_json() {
+  local name=$1 output
+  if ! output=$(tmux_command list-panes -s -t "=$name" \
+      -F $'#{window_index}\t#{window_name}\t#{window_active}\t#{pane_id}\t#{pane_index}\t#{pane_title}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_active}' 2>&1); then
+    fail "Unable to inspect tmux session '$name': $output"
+  fi
+
+  jq -Rsc '
+    split("\n")
+    | map(select(length > 0))
+    | map(
+        split("\t")
+        | if length != 9 then error("unexpected tmux pane format") else . end
+        | {
+            windowIndex: (.[0] | tonumber),
+            windowName: .[1],
+            windowActive: (.[2] == "1"),
+            pane: {
+              id: .[3],
+              index: (.[4] | tonumber),
+              title: .[5],
+              command: .[6],
+              path: .[7],
+              active: (.[8] == "1")
+            }
+          }
+      )
+    | group_by(.windowIndex)
+    | map({
+        index: .[0].windowIndex,
+        name: .[0].windowName,
+        active: .[0].windowActive,
+        panes: map(.pane)
+      })
+  ' <<<"$output" 2>/dev/null \
+    || fail "Unable to parse tmux window and pane data"
+}
+
 list_command() {
   local hostname_value favorites sessions version
   hostname_value=$(hostname 2>/dev/null || printf 'local')
@@ -197,6 +235,18 @@ list_command() {
             ])
         }
     '
+}
+
+detail_command() {
+  local name=${1:-} windows
+  validate_session_name "$name"
+  tmux_available || fail "tmux is not installed"
+  tmux_command has-session -t "=$name" 2>/dev/null \
+    || fail "tmux session '$name' no longer exists"
+
+  capture_json windows list_session_detail_json "$name"
+  jq -cn --arg name "$name" --argjson windows "$windows" \
+    '{ok: true, action: "detail", session: $name, windows: $windows}'
 }
 
 launch_terminal() {
@@ -296,7 +346,7 @@ favorite_reorder_command() {
 }
 
 usage() {
-  fail "Usage: omamux list | attach <name> | create <name> | favorite toggle <name> | favorite reorder <name>..." 64
+  fail "Usage: omamux list | detail <name> | attach <name> | create <name> | favorite toggle <name> | favorite reorder <name>..." 64
 }
 
 main() {
@@ -305,6 +355,10 @@ main() {
     list)
       (( $# == 1 )) || usage
       list_command
+      ;;
+    detail)
+      (( $# == 2 )) || usage
+      detail_command "$2"
       ;;
     attach)
       (( $# == 2 )) || usage

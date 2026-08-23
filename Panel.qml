@@ -21,6 +21,10 @@ Panel {
   property bool cursorActive: false
   property bool creating: false
   property string createText: ""
+  property bool showingDetail: false
+  property string detailSessionName: ""
+  property var detailWindows: []
+  property string detailError: ""
   property string actionKind: ""
   property string actionError: ""
   property bool closeAfterAction: false
@@ -43,6 +47,7 @@ Panel {
   readonly property color availableColor: Color.accent
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property bool actionBusy: actionProcess.running
+  readonly property bool detailLoading: detailProcess.running
   readonly property bool interactionBusy: actionBusy || reorderAnimating || dragReordering || favoriteSyncPending
   readonly property int reorderDuration: 180
   readonly property int dragDisplaceDuration: 110
@@ -50,6 +55,14 @@ Panel {
     var count = 0
     for (var i = 0; i < rows.length; i++)
       if (rows[i].favorite === true) count++
+    return count
+  }
+  readonly property int detailPaneCount: {
+    var count = 0
+    for (var i = 0; i < detailWindows.length; i++) {
+      var panes = Array.isArray(detailWindows[i].panes) ? detailWindows[i].panes : []
+      count += panes.length
+    }
     return count
   }
   readonly property int sessionRowHeight: Style.space(44)
@@ -111,7 +124,7 @@ Panel {
   }
 
   function moveSelection(delta) {
-    if (rows.length === 0 || interactionBusy) return
+    if (showingDetail || rows.length === 0 || interactionBusy) return
     cursorActive = true
     selectedIndex = Model.clampedIndex(selectedIndex + delta, rows.length)
     revealSelection()
@@ -119,12 +132,16 @@ Panel {
 
   function activateSelected() {
     if (interactionBusy) return
+    if (showingDetail) {
+      if (detailSessionName !== "") attachSession(detailSessionName)
+      return
+    }
     var session = selectedSession()
     if (session) attachSession(String(session.name))
   }
 
   function selectRow(index) {
-    if (interactionBusy) return
+    if (showingDetail || interactionBusy) return
     cursorActive = true
     selectedIndex = Model.clampedIndex(index, rows.length)
   }
@@ -160,6 +177,46 @@ Panel {
 
   function attachSession(name) {
     runAction(["attach", name], true)
+  }
+
+  function openSessionDetail(name) {
+    if (interactionBusy || detailLoading || !hostWidget || name === "") return
+    cancelCreate()
+    showingDetail = true
+    detailSessionName = name
+    detailWindows = []
+    detailError = ""
+    detailProcess.command = [hostWidget.backendPath, "detail", name]
+    detailProcess.running = true
+    Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+  }
+
+  function openSelectedDetail() {
+    if (showingDetail) return
+    var session = selectedSession()
+    if (session) openSessionDetail(String(session.name || ""))
+  }
+
+  function closeSessionDetail() {
+    if (!showingDetail) return
+    showingDetail = false
+    detailSessionName = ""
+    detailWindows = []
+    detailError = ""
+    revealSelection()
+    Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+  }
+
+  function applyDetail(raw) {
+    var result = Model.parseDetailPayload(raw)
+    if (result.ok) {
+      detailSessionName = result.session
+      detailWindows = result.windows
+      detailError = ""
+    } else {
+      detailWindows = []
+      detailError = result.error
+    }
   }
 
   function toggleFavorite(name) {
@@ -310,7 +367,7 @@ Panel {
   }
 
   function startCreate() {
-    if (interactionBusy || !hostWidget || !hostWidget.tmuxAvailable) return
+    if (showingDetail || interactionBusy || !hostWidget || !hostWidget.tmuxAvailable) return
     creating = true
     actionError = ""
     createText = Model.suggestSessionName(rows)
@@ -346,6 +403,10 @@ Panel {
     } else {
       creating = false
       actionError = ""
+      showingDetail = false
+      detailSessionName = ""
+      detailWindows = []
+      detailError = ""
     }
   }
 
@@ -395,6 +456,14 @@ Panel {
     }
   }
 
+  Process {
+    id: detailProcess
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.applyDetail(text)
+    }
+  }
+
   KeyboardPanel {
     id: panel
     anchorItem: root.anchorItem
@@ -412,17 +481,26 @@ Panel {
 
       onMoveRequested: function(dx, dy) {
         if (dy !== 0) root.moveSelection(dy)
-        if (dx !== 0) root.moveSelectedFavorite(dx)
+        if (dx > 0) root.openSelectedDetail()
+        if (dx < 0) root.closeSessionDetail()
       }
       onActivateRequested: root.activateSelected()
-      onCloseRequested: root.close()
+      onCloseRequested: {
+        if (root.showingDetail) root.closeSessionDetail()
+        else root.close()
+      }
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(text) {
-        if (text === "r" || text === "R") {
+        if (text === "J") {
+          if (!root.showingDetail) root.moveSelectedFavorite(1)
+        } else if (text === "K") {
+          if (!root.showingDetail) root.moveSelectedFavorite(-1)
+        } else if (text === "r" || text === "R") {
           if (root.hostWidget) root.hostWidget.refresh()
         } else if (text === "n" || text === "N") {
           root.startCreate()
         } else if (text === "f" || text === "F") {
+          if (root.showingDetail) return
           var session = root.selectedSession()
           if (session) root.toggleFavorite(String(session.name))
         }
@@ -435,8 +513,10 @@ Panel {
 
         PanelHero {
           width: parent.width
-          title: "Omamux"
-          meta: (root.hostWidget ? root.hostWidget.hostName : "local") + " · local tmux"
+          title: root.showingDetail ? root.detailSessionName : "Omamux"
+          meta: root.showingDetail
+            ? "SESSION DETAILS · LOCAL TMUX"
+            : (root.hostWidget ? root.hostWidget.hostName : "local") + " · local tmux"
           foreground: root.foreground
           fontFamily: root.fontFamily
 
@@ -454,6 +534,16 @@ Panel {
               spacing: Style.space(4)
 
               PanelActionButton {
+                visible: root.showingDetail
+                iconText: "‹"
+                tooltipText: "Back to sessions (←)"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: root.closeSessionDetail()
+              }
+
+              PanelActionButton {
+                visible: !root.showingDetail
                 iconText: "󰑐"
                 tooltipText: "Refresh sessions (r)"
                 foreground: root.foreground
@@ -462,6 +552,7 @@ Panel {
               }
 
               PanelActionButton {
+                visible: !root.showingDetail
                 iconText: "+"
                 tooltipText: "New session (n)"
                 foreground: root.foreground
@@ -474,7 +565,9 @@ Panel {
         }
 
         BorderSurface {
-          visible: root.actionError !== "" || (!!root.hostWidget && root.hostWidget.errorText !== "")
+          visible: root.actionError !== ""
+            || root.detailError !== ""
+            || (!!root.hostWidget && root.hostWidget.errorText !== "")
           width: parent.width
           implicitHeight: errorLabel.implicitHeight + Style.space(20)
           color: Util.alpha(root.urgent, 0.10)
@@ -490,7 +583,9 @@ Panel {
             anchors.rightMargin: Style.space(10)
             text: root.actionError !== ""
               ? root.actionError
-              : (root.hostWidget ? root.hostWidget.errorText : "")
+              : (root.detailError !== ""
+                ? root.detailError
+                : (root.hostWidget ? root.hostWidget.errorText : ""))
             color: root.foreground
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
@@ -581,6 +676,8 @@ Panel {
         }
 
         Item {
+          id: sessionsHeading
+          visible: !root.showingDetail
           width: parent.width
           implicitHeight: Math.max(sessionsHeader.implicitHeight, sessionCount.implicitHeight)
 
@@ -607,6 +704,8 @@ Panel {
         }
 
         Item {
+          id: sessionsView
+          visible: !root.showingDetail
           width: parent.width
           implicitHeight: root.listHeight
           height: implicitHeight
@@ -813,12 +912,13 @@ Panel {
                     onClicked: root.toggleFavorite(String(sessionRow.modelData.name))
                   }
 
-                  Text {
-                    text: "›"
-                    color: root.dim
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.icon
-                    anchors.verticalCenter: parent.verticalCenter
+                  PanelActionButton {
+                    iconText: "›"
+                    tooltipText: "Session details (→)"
+                    foreground: root.dim
+                    hoverColor: root.foreground
+                    fontFamily: root.fontFamily
+                    onClicked: root.openSessionDetail(String(sessionRow.modelData.name || ""))
                   }
                 }
               }
@@ -859,15 +959,210 @@ Panel {
           }
         }
 
-        Text {
-          visible: root.rows.length > 0
+        Column {
+          visible: root.showingDetail
           width: parent.width
-          text: "Enter attach · f star · h/l order · n new · r refresh"
+          spacing: Style.space(8)
+
+          Item {
+            width: parent.width
+            implicitHeight: Math.max(detailHeading.implicitHeight, detailCount.implicitHeight)
+
+            PanelSectionHeader {
+              id: detailHeading
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
+              text: "WINDOWS AND PANES"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+            }
+
+            Text {
+              id: detailCount
+              anchors.right: parent.right
+              anchors.rightMargin: Style.space(6)
+              anchors.verticalCenter: parent.verticalCenter
+              text: root.detailWindows.length + " window"
+                + (root.detailWindows.length === 1 ? "" : "s")
+                + " · " + root.detailPaneCount + " pane"
+                + (root.detailPaneCount === 1 ? "" : "s")
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: true
+            }
+          }
+
+          Item {
+            visible: root.detailLoading || root.detailError !== "" || root.detailWindows.length === 0
+            width: parent.width
+            implicitHeight: Style.space(112)
+
+            Text {
+              anchors.centerIn: parent
+              width: parent.width - Style.space(40)
+              text: root.detailLoading
+                ? "Loading session details…"
+                : (root.detailError !== "" ? "Session details unavailable" : "No windows found")
+              color: root.detailError !== "" ? root.urgent : root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              font.bold: true
+              horizontalAlignment: Text.AlignHCenter
+            }
+          }
+
+          Flickable {
+            id: detailFlick
+            visible: !root.detailLoading && root.detailError === "" && root.detailWindows.length > 0
+            width: parent.width
+            implicitHeight: Math.min(Style.space(360), detailRows.implicitHeight)
+            height: implicitHeight
+            contentWidth: width
+            contentHeight: detailRows.implicitHeight
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+            Column {
+              id: detailRows
+              width: detailFlick.width
+              spacing: Style.space(8)
+
+              Repeater {
+                model: root.detailWindows
+
+                delegate: Column {
+                  id: windowBlock
+                  required property var modelData
+                  required property int index
+                  width: detailRows.width
+                  spacing: Style.space(4)
+
+                  Item {
+                    width: parent.width
+                    height: Style.space(28)
+
+                    Text {
+                      anchors.left: parent.left
+                      anchors.leftMargin: Style.space(6)
+                      anchors.verticalCenter: parent.verticalCenter
+                      text: windowBlock.modelData.index + ": "
+                        + String(windowBlock.modelData.name || "window")
+                      color: root.foreground
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.body
+                      font.bold: true
+                    }
+
+                    Text {
+                      visible: windowBlock.modelData.active === true
+                      anchors.right: parent.right
+                      anchors.rightMargin: Style.space(6)
+                      anchors.verticalCenter: parent.verticalCenter
+                      text: "ACTIVE"
+                      color: root.dim
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                      font.bold: true
+                    }
+                  }
+
+                  Repeater {
+                    model: Array.isArray(windowBlock.modelData.panes)
+                      ? windowBlock.modelData.panes
+                      : []
+
+                    delegate: BorderSurface {
+                      id: paneRow
+                      required property var modelData
+                      width: windowBlock.width
+                      height: Style.space(42)
+                      radius: Style.cornerRadius
+                      color: paneRow.modelData.active === true
+                        ? Style.selectedFillFor(root.foreground, Color.accent)
+                        : "transparent"
+                      borderSpec: paneRow.modelData.active === true
+                        ? Border.controlSpec("selected", root.foreground, Color.accent)
+                        : Border.none()
+
+                      Column {
+                        anchors.left: parent.left
+                        anchors.right: activePaneLabel.left
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.leftMargin: Style.space(8)
+                        anchors.rightMargin: Style.space(8)
+                        spacing: Style.space(2)
+
+                        Text {
+                          width: parent.width
+                          text: paneRow.modelData.index + " · "
+                            + String(paneRow.modelData.command || "pane")
+                            + (String(paneRow.modelData.title || "") !== ""
+                              ? " · " + String(paneRow.modelData.title)
+                              : "")
+                          color: root.foreground
+                          font.family: root.fontFamily
+                          font.pixelSize: Style.font.body
+                          font.bold: paneRow.modelData.active === true
+                          elide: Text.ElideRight
+                        }
+
+                        Text {
+                          width: parent.width
+                          text: String(paneRow.modelData.path || "")
+                          color: root.dim
+                          font.family: root.fontFamily
+                          font.pixelSize: Style.font.caption
+                          elide: Text.ElideMiddle
+                        }
+                      }
+
+                      Text {
+                        id: activePaneLabel
+                        visible: paneRow.modelData.active === true
+                        anchors.right: parent.right
+                        anchors.rightMargin: Style.space(8)
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "ACTIVE"
+                        color: root.foreground
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                        font.bold: true
+                      }
+                    }
+                  }
+
+                  PanelSeparator {
+                    visible: windowBlock.index < root.detailWindows.length - 1
+                    width: parent.width
+                    foreground: root.foreground
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        Text {
+          visible: !root.showingDetail && root.rows.length > 0
+          width: parent.width
+          text: "j/k move · J/K order · → details · Enter attach · f star"
           color: root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
           horizontalAlignment: Text.AlignHCenter
           elide: Text.ElideRight
+        }
+
+        Text {
+          visible: root.showingDetail
+          width: parent.width
+          text: "← back · Enter attach"
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          horizontalAlignment: Text.AlignHCenter
         }
       }
     }

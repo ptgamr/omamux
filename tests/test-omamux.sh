@@ -44,12 +44,22 @@ assert_json "$empty" '.ok and .tmux.available and (.sessions | length == 0)' \
 
 tmux -L "$SOCKET" new-session -d -s alpha
 tmux -L "$SOCKET" new-window -d -t '=alpha'
+first_alpha_window=$(tmux -L "$SOCKET" list-windows -t '=alpha' -F '#{window_id}' | head -n 1)
+tmux -L "$SOCKET" split-window -d -t "$first_alpha_window"
 tmux -L "$SOCKET" new-session -d -s beta
 
 listed=$($OMAMUX list)
 assert_json "$listed" '.sessions | length == 2' "list should return both isolated sessions"
 assert_json "$listed" 'any(.sessions[]; .name == "alpha" and .windows == 2 and .attachedClients == 0)' \
   "list should return tmux metadata"
+
+detail=$($OMAMUX detail alpha)
+assert_json "$detail" '.ok and .session == "alpha" and (.windows | length == 2)' \
+  "detail should group panes into both windows"
+assert_json "$detail" '([.windows[].panes[]] | length) == 3' \
+  "detail should return every pane in the session"
+assert_json "$detail" 'all(.windows[].panes[]; (.id | startswith("%")) and (.command | length > 0))' \
+  "detail should return pane identity and command metadata"
 
 $OMAMUX favorite toggle alpha >/dev/null
 starred=$($OMAMUX list)

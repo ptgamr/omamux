@@ -9,7 +9,8 @@ Version `0.1.0` is intentionally local-only. Remote host support is planned afte
 - Lists local tmux sessions with window count, age, and attached client count.
 - Opens an exact session in Omarchy's configured terminal.
 - Creates and immediately attaches to a named session.
-- Keeps ordered favorites, with drag, arrow-button, and keyboard reordering.
+- Keeps ordered favorites, with drag and keyboard reordering.
+- Shows the windows and panes running inside each session.
 - Supports mouse and keyboard navigation.
 - Refreshes automatically without changing tmux configuration or global options.
 - Inherits Quattro popup colors, borders, fonts, spacing, and theme changes.
@@ -39,9 +40,10 @@ omarchy bar move io.github.ptgamr.omamux --section right
 
 - Left-click the bar widget to open or close the session panel.
 - Right-click the bar widget to refresh.
-- Click a session, or select it and press Enter, to open an attached terminal.
+- Use `j`/`k` or the arrow keys to select a session, then press Enter to attach.
 - Click `☆`/`★`, or press `f`, to toggle a favorite.
-- Drag a favorite row, use its arrow buttons, or press `h`/`l` to reorder it.
+- Drag a favorite row, or press `Shift+j`/`Shift+k`, to reorder it.
+- Press Right to inspect a session's windows and panes, then Left to go back.
 - Click `+`, or press `n`, to create a session.
 - Press `r` to refresh and Escape to close.
 

@@ -35,6 +35,32 @@ function parseActionPayload(raw, fallbackError) {
   }
 }
 
+function parseDetailPayload(raw) {
+  var text = String(raw || "").trim()
+  if (text === "")
+    return { ok: false, error: "Omamux returned no session details", session: "", windows: [] }
+
+  try {
+    var payload = JSON.parse(text)
+    if (!payload || payload.ok !== true)
+      return {
+        ok: false,
+        error: String(payload && payload.error || "Unable to inspect tmux session"),
+        session: "",
+        windows: []
+      }
+
+    return {
+      ok: true,
+      error: "",
+      session: String(payload.session || ""),
+      windows: Array.isArray(payload.windows) ? payload.windows : []
+    }
+  } catch (e) {
+    return { ok: false, error: "Unable to parse Omamux session details", session: "", windows: [] }
+  }
+}
+
 function validationError(value) {
   var name = String(value || "").trim()
   if (name === "") return "Enter a session name"
