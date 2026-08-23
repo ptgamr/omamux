@@ -1,12 +1,24 @@
 # Omamux
 
-Omamux is a local tmux session picker for the Omarchy Quattro bar. It brings the session workflow from [TermRover](https://termrover.sh/) to the desktop while using Omarchy's native panel components and current theme.
+Omamux is a local tmux session picker for the Omarchy Quattro bar. It brings the session workflow from [TermRover.sh](https://termrover.sh/) to the desktop while using Omarchy's native panel components and current theme.
 
 Version `0.1.0` is intentionally local-only. Remote host support is planned after the local workflow is stable.
 
 ## Demo
 
-[Watch the 17-second Omamux demo](omamux-demo.mp4) to see session navigation, favorites, reordering, and inline rename in the Omarchy panel.
+https://github.com/user-attachments/assets/1808ea97-7fc0-4d30-8184-f7d6d5a5dbf4
+
+What's in the demo: session navigation, favorites, reordering, and inline rename session
+
+## Hotkeys
+
+- j/k: change focus
+- f: mark session as favorite
+- shift j/k: re-order favorites
+- r: rename
+- c: create new session
+- enter: launch that session (if already attached in a workspace, it'll focus to that window/workspace instead)
+
 
 ## Features
 
