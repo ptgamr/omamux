@@ -1,0 +1,336 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+readonly HOST_ID="local"
+readonly STATE_ROOT="${XDG_STATE_HOME:-${HOME}/.local/state}/omamux"
+readonly STATE_FILE="${OMAMUX_STATE_FILE:-${STATE_ROOT}/favorites.json}"
+readonly TMUX_BIN="${OMAMUX_TMUX_BIN:-tmux}"
+
+TMUX_ARGS=()
+if [[ -n ${OMAMUX_TMUX_SOCKET:-} ]]; then
+  TMUX_ARGS=(-L "$OMAMUX_TMUX_SOCKET")
+fi
+
+plain_json_error() {
+  local message=${1:-"Omamux failed"}
+  message=${message//\\/\\\\}
+  message=${message//\"/\\\"}
+  message=${message//$'\n'/\\n}
+  printf '{"ok":false,"error":"%s"}\n' "$message"
+}
+
+if ! command -v jq >/dev/null 2>&1; then
+  plain_json_error "jq is required by Omamux"
+  exit 127
+fi
+
+json_error() {
+  jq -cn --arg error "${1:-Omamux failed}" '{ok: false, error: $error}'
+}
+
+fail() {
+  json_error "$1"
+  exit "${2:-1}"
+}
+
+# Capture JSON-producing helpers without swallowing their structured failure
+# output. A plain `value=$(helper)` under `set -e` exits the parent immediately
+# and leaves the captured error unavailable to the QML caller.
+capture_json() {
+  local destination=$1
+  shift
+  local value status
+
+  set +e
+  value=$("$@")
+  status=$?
+  set -e
+
+  if (( status != 0 )); then
+    printf '%s\n' "$value"
+    exit "$status"
+  fi
+  printf -v "$destination" '%s' "$value"
+}
+
+tmux_available() {
+  command -v "$TMUX_BIN" >/dev/null 2>&1
+}
+
+tmux_command() {
+  "$TMUX_BIN" "${TMUX_ARGS[@]}" "$@"
+}
+
+empty_state() {
+  jq -cn --arg host "$HOST_ID" '{schemaVersion: 1, hosts: {($host): {favorites: []}}}'
+}
+
+read_state() {
+  if [[ ! -e $STATE_FILE ]]; then
+    empty_state
+    return
+  fi
+
+  [[ -f $STATE_FILE ]] || fail "Omamux state path is not a regular file: $STATE_FILE"
+  jq -ce --arg host "$HOST_ID" '
+    select(.schemaVersion == 1)
+    | select((.hosts | type) == "object")
+    | select((.hosts[$host] | type) == "object")
+    | select((.hosts[$host].favorites | type) == "array")
+    | select(all(.hosts[$host].favorites[];
+        (.name | type) == "string"
+        and (.name | length) > 0
+        and (.starredAt | type) == "number"))
+  ' "$STATE_FILE" 2>/dev/null \
+    || fail "Omamux state is malformed; fix or move $STATE_FILE and retry"
+}
+
+state_favorites() {
+  local state
+  capture_json state read_state
+  jq -c --arg host "$HOST_ID" '.hosts[$host].favorites' <<<"$state"
+}
+
+write_favorites() {
+  local favorites=$1
+  local state next tmp state_dir
+  capture_json state read_state
+  next=$(jq -c --arg host "$HOST_ID" --argjson favorites "$favorites" \
+    '.hosts[$host].favorites = $favorites' <<<"$state")
+
+  state_dir=$(dirname -- "$STATE_FILE")
+  mkdir -p -- "$state_dir"
+  tmp=$(mktemp "$state_dir/.favorites.json.tmp.XXXXXX")
+  chmod 600 "$tmp"
+  printf '%s\n' "$next" >"$tmp"
+  mv -f -- "$tmp" "$STATE_FILE"
+}
+
+validate_session_name() {
+  local name=${1:-}
+  [[ -n $name ]] || fail "Session name cannot be empty"
+  [[ $name != *.* && $name != *:* ]] \
+    || fail "Session names cannot contain '.' or ':'"
+  [[ ! $name =~ [[:cntrl:]] ]] \
+    || fail "Session names cannot contain control characters"
+}
+
+list_sessions_json() {
+  local output
+  if ! output=$(tmux_command list-sessions \
+      -F $'#{session_name}\t#{session_windows}\t#{session_created}\t#{session_attached}' 2>&1); then
+    if [[ $output == *"no server running"* || $output == *"no sessions"* \
+        || $output == *"failed to connect"* || $output == *"error connecting to"* ]]; then
+      printf '[]\n'
+      return
+    fi
+    fail "Unable to list tmux sessions: $output"
+  fi
+
+  if [[ -z $output ]]; then
+    printf '[]\n'
+    return
+  fi
+
+  jq -Rsc '
+    split("\n")
+    | map(select(length > 0))
+    | map(
+        split("\t")
+        | if length != 4 then error("unexpected tmux list format") else . end
+        | {
+            name: .[0],
+            windows: (.[1] | tonumber),
+            createdAt: (.[2] | tonumber),
+            attachedClients: (.[3] | tonumber)
+          }
+      )
+  ' <<<"$output" 2>/dev/null \
+    || fail "Unable to parse tmux session data"
+}
+
+list_command() {
+  local hostname_value favorites sessions version
+  hostname_value=$(hostname 2>/dev/null || printf 'local')
+  capture_json favorites state_favorites
+
+  if ! tmux_available; then
+    jq -cn \
+      --arg host "$HOST_ID" \
+      --arg hostname "$hostname_value" \
+      '{
+        ok: true,
+        error: "tmux is not installed",
+        host: {id: $host, name: $hostname},
+        tmux: {available: false, version: ""},
+        sessions: []
+      }'
+    return
+  fi
+
+  capture_json sessions list_sessions_json
+  version=$(tmux_command -V 2>/dev/null || true)
+
+  jq -cn \
+    --arg host "$HOST_ID" \
+    --arg hostname "$hostname_value" \
+    --arg version "$version" \
+    --argjson favorites "$favorites" \
+    --argjson sessions "$sessions" '
+      ($sessions | map({key: .name, value: .}) | from_entries) as $byName
+      | ($favorites | map(.name)) as $favoriteNames
+      | {
+          ok: true,
+          error: "",
+          host: {id: $host, name: $hostname},
+          tmux: {available: true, version: $version},
+          sessions:
+            ([
+              $favorites[]
+              | select($byName[.name] != null)
+              | $byName[.name] + {favorite: true, starredAt: .starredAt}
+            ] + [
+              $sessions[]
+              | select(.name as $name | ($favoriteNames | index($name)) == null)
+              | . + {favorite: false, starredAt: 0}
+            ])
+        }
+    '
+}
+
+launch_terminal() {
+  local name=$1
+  shift
+  local launcher=${OMAMUX_TERMINAL_LAUNCHER:-}
+
+  if [[ -n $launcher ]]; then
+    [[ -x $launcher ]] || fail "Configured terminal launcher is not executable: $launcher"
+    "$launcher" "$TMUX_BIN" "${TMUX_ARGS[@]}" -u "$@" -t "=$name" \
+      || fail "Unable to launch a terminal for session '$name'"
+    return
+  fi
+
+  command -v omarchy-launch-terminal >/dev/null 2>&1 \
+    || fail "Omarchy's terminal launcher is not available"
+
+  (nohup omarchy-launch-terminal "$TMUX_BIN" "${TMUX_ARGS[@]}" -u "$@" -t "=$name" \
+      </dev/null >/dev/null 2>&1 &)
+}
+
+attach_command() {
+  local name=${1:-}
+  validate_session_name "$name"
+  tmux_available || fail "tmux is not installed"
+  tmux_command has-session -t "=$name" 2>/dev/null \
+    || fail "tmux session '$name' no longer exists"
+
+  launch_terminal "$name" attach-session
+  jq -cn --arg name "$name" '{ok: true, action: "attach", session: $name}'
+}
+
+create_command() {
+  local name=${1:-}
+  validate_session_name "$name"
+  tmux_available || fail "tmux is not installed"
+
+  if tmux_command has-session -t "=$name" 2>/dev/null; then
+    fail "tmux session '$name' already exists"
+  fi
+
+  tmux_command new-session -d -s "$name" >/dev/null \
+    || fail "Unable to create tmux session '$name'"
+  launch_terminal "$name" attach-session
+  jq -cn --arg name "$name" '{ok: true, action: "create", session: $name}'
+}
+
+favorite_toggle_command() {
+  local name=${1:-}
+  local favorites now next favorite
+  validate_session_name "$name"
+  capture_json favorites state_favorites
+  now=$(date +%s%3N)
+
+  next=$(jq -c --arg name "$name" --argjson at "$now" '
+    if any(.[]; .name == $name) then
+      map(select(.name != $name))
+    else
+      [{name: $name, starredAt: $at}] + .
+    end
+  ' <<<"$favorites")
+  write_favorites "$next"
+  favorite=$(jq -cn --arg name "$name" --argjson favorites "$next" \
+    'any($favorites[]; .name == $name)')
+  jq -cn --arg name "$name" --argjson favorite "$favorite" \
+    '{ok: true, action: "favorite-toggle", session: $name, favorite: $favorite}'
+}
+
+favorite_reorder_command() {
+  (( $# > 0 )) || fail "Favorite reorder requires at least one session name"
+
+  local name existing favorites names next
+  local -a seen_names=()
+  for name in "$@"; do
+    validate_session_name "$name"
+    for existing in "${seen_names[@]}"; do
+      [[ $existing != "$name" ]] || fail "Favorite reorder contains duplicate session '$name'"
+    done
+    seen_names+=("$name")
+  done
+
+  capture_json favorites state_favorites
+  names=$(printf '%s\0' "$@" | jq -Rsc 'split("\u0000")[:-1]')
+  next=$(jq -cn --argjson current "$favorites" --argjson names "$names" '
+    ($current | map({key: .name, value: .}) | from_entries) as $byName
+    | if any($names[]; $byName[.] == null) then
+        error("reorder includes a session that is not a favorite")
+      else
+        ([$names[] | $byName[.]]
+          + [$current[] | select(.name as $name | ($names | index($name)) == null)])
+      end
+  ' 2>/dev/null) || fail "Favorite reorder includes a session that is not a favorite"
+
+  write_favorites "$next"
+  jq -cn --argjson favorites "$next" \
+    '{ok: true, action: "favorite-reorder", favorites: ($favorites | map(.name))}'
+}
+
+usage() {
+  fail "Usage: omamux list | attach <name> | create <name> | favorite toggle <name> | favorite reorder <name>..." 64
+}
+
+main() {
+  local command=${1:-}
+  case "$command" in
+    list)
+      (( $# == 1 )) || usage
+      list_command
+      ;;
+    attach)
+      (( $# == 2 )) || usage
+      attach_command "$2"
+      ;;
+    create)
+      (( $# == 2 )) || usage
+      create_command "$2"
+      ;;
+    favorite)
+      local subcommand=${2:-}
+      case "$subcommand" in
+        toggle)
+          (( $# == 3 )) || usage
+          favorite_toggle_command "$3"
+          ;;
+        reorder)
+          (( $# >= 3 )) || usage
+          shift 2
+          favorite_reorder_command "$@"
+          ;;
+        *) usage ;;
+      esac
+      ;;
+    *) usage ;;
+  esac
+}
+
+main "$@"

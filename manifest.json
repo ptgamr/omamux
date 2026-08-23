@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.ptgamr.omamux",
+  "name": "Omamux",
+  "version": "0.1.0",
+  "author": "Anh Trinh",
+  "license": "MIT",
+  "description": "A local tmux session picker for the Omarchy Quattro bar.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Omamux",
+    "description": "List, favorite, reorder, create, and attach to local tmux sessions.",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "refreshIntervalSec": 10
+    }
+  }
+}
