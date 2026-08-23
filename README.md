@@ -128,4 +128,6 @@ Omamux does not edit `.tmux.conf`, Omarchy configuration, terminal configuration
 
 State, Hyprland client data, and tmux client/session/pane data are captured with fixed byte ceilings before parsing. Omamux also limits row counts and retained field lengths; oversized input is rejected with a structured error instead of being forwarded to QML.
 
+Subprocesses that only report success or failure, including a configured `OMAMUX_TERMINAL_LAUNCHER`, have their streams discarded so their output cannot reach or corrupt the JSON result.
+
 See [PLAN.md](PLAN.md) for the full local-first design and the later remote-host direction.

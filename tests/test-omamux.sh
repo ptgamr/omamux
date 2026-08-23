@@ -254,6 +254,29 @@ mapfile -t attach_args <"$CAPTURE"
 [[ ${attach_args[*]} == *"attach-session -t =alpha"* ]] \
   || fail "attach should launch an exact tmux target"
 
+noisy_launcher="$TEST_ROOT/noisy-terminal"
+cat >"$noisy_launcher" <<'NOISY'
+#!/usr/bin/env bash
+head -c 200000 /dev/zero | tr '\0' N
+head -c 200000 /dev/zero | tr '\0' E >&2
+NOISY
+chmod +x "$noisy_launcher"
+noisy_attach=$(OMAMUX_TERMINAL_LAUNCHER="$noisy_launcher" $OMAMUX attach alpha 2>/dev/null)
+assert_json "$noisy_attach" '.ok == true and .action == "attach" and .session == "alpha"' \
+  "a noisy terminal launcher must not reach the JSON result"
+(( $(printf '%s' "$noisy_attach" | wc -c) <= 512 )) \
+  || fail "launcher output should not grow the attach result"
+
+long_launcher="$TEST_ROOT"
+for _ in {1..12}; do
+  long_launcher="$long_launcher/$(head -c 80 /dev/zero | tr '\0' l)"
+done
+if launcher_error=$(OMAMUX_TERMINAL_LAUNCHER="$long_launcher" $OMAMUX attach alpha 2>/dev/null); then
+  fail "a non-executable launcher should be rejected"
+fi
+assert_json "$launcher_error" '.ok == false and (.error | utf8bytelength) <= 600' \
+  "the launcher path in an error should be capped"
+
 script -qefc "tmux -L '$SOCKET' attach-session -t '=alpha'" /dev/null \
   >/dev/null 2>&1 &
 hypr_owner_pid=$!

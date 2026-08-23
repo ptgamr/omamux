@@ -658,8 +658,15 @@ launch_terminal() {
   local launcher=${OMAMUX_TERMINAL_LAUNCHER:-}
 
   if [[ -n $launcher ]]; then
-    [[ -x $launcher ]] || fail "Configured terminal launcher is not executable: $launcher"
+    local launcher_excerpt
+    if [[ ! -x $launcher ]]; then
+      command_error_excerpt launcher_excerpt "$launcher"
+      fail "Configured terminal launcher is not executable: $launcher_excerpt"
+    fi
+    # The launcher shares this process's stdout, which carries the JSON result.
+    # Discard its streams so a noisy launcher cannot grow or corrupt that result.
     "$launcher" "$TMUX_BIN" "${TMUX_ARGS[@]}" -u "$@" -t "=$name" \
+      >/dev/null 2>&1 \
       || fail "Unable to launch a terminal for session '$name'"
     return
   fi
@@ -738,7 +745,7 @@ create_command() {
     fail "tmux session '$name' already exists"
   fi
 
-  tmux_command new-session -d -s "$name" >/dev/null \
+  tmux_command new-session -d -s "$name" >/dev/null 2>&1 \
     || fail "Unable to create tmux session '$name'"
   launch_terminal "$name" attach-session
   jq -cn --arg name "$name" '{ok: true, action: "create", session: $name}'
