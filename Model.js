@@ -129,6 +129,13 @@ function clampedIndex(index, count) {
   return Math.max(0, Math.min(length - 1, Number(index || 0)))
 }
 
+function movedSelection(index, count, delta, cursorActive) {
+  var length = Math.max(0, Number(count || 0))
+  if (length === 0) return -1
+  if (cursorActive !== true) return Number(delta || 0) < 0 ? length - 1 : 0
+  return clampedIndex(Number(index || 0) + Number(delta || 0), length)
+}
+
 function favoriteOrder(sessions) {
   var rows = Array.isArray(sessions) ? sessions : []
   var names = []

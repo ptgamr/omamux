@@ -125,8 +125,8 @@ Panel {
 
   function moveSelection(delta) {
     if (showingDetail || rows.length === 0 || interactionBusy) return
+    selectedIndex = Model.movedSelection(selectedIndex, rows.length, delta, cursorActive)
     cursorActive = true
-    selectedIndex = Model.clampedIndex(selectedIndex + delta, rows.length)
     revealSelection()
   }
 
