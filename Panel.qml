@@ -67,6 +67,13 @@ Panel {
       if (rows[i].favorite === true) count++
     return count
   }
+  readonly property int runningSessionCount: {
+    var count = 0
+    for (var i = 0; i < rows.length; i++)
+      if (rows[i].running !== false) count++
+    return count
+  }
+  readonly property int savedSessionCount: rows.length - runningSessionCount
   readonly property int detailPaneCount: {
     var count = 0
     for (var i = 0; i < detailWindows.length; i++) {
@@ -233,7 +240,9 @@ Panel {
       return
     }
     var session = selectedSession()
-    if (session) attachSession(String(session.name))
+    if (!session) return
+    if (session.running === false) recreateSession(String(session.name))
+    else attachSession(String(session.name))
   }
 
   function selectRow(index) {
@@ -286,6 +295,14 @@ Panel {
     runAction(args, true)
   }
 
+  function recreateSession(name) {
+    if (!hostWidget || !hostWidget.tmuxAvailable) {
+      showInteractionHint("Install tmux before recreating this session")
+      return
+    }
+    runAction(["create", name], true)
+  }
+
   function openSessionDetail(name) {
     if (interactionBusy || detailLoading || !hostWidget || name === "") return
     cancelNameEdit()
@@ -304,7 +321,12 @@ Panel {
   function openSelectedDetail() {
     if (showingDetail) return
     var session = selectedSession()
-    if (session) openSessionDetail(String(session.name || ""))
+    if (!session) return
+    if (session.running === false) {
+      showInteractionHint("Recreate this session before viewing details")
+      return
+    }
+    openSessionDetail(String(session.name || ""))
   }
 
   function closeSessionDetail() {
@@ -346,6 +368,11 @@ Panel {
       if (String(rows[i].name || "") === name) { index = i; break }
     }
     if (index < 0) return
+
+    if (rows[index].running === false) {
+      runAction(["favorite", "toggle", name], false)
+      return
+    }
 
     var toggled = Model.toggledFavoriteRows(rows, index)
     animateReorder(index, toggled.targetIndex, toggled.rows, ["favorite", "toggle", name])
@@ -514,6 +541,10 @@ Panel {
     if (showingDetail || interactionBusy || !hostWidget || !hostWidget.tmuxAvailable) return
     var session = selectedSession()
     if (!session) return
+    if (session.running === false) {
+      showInteractionHint("Recreate this session before renaming it")
+      return
+    }
     creating = false
     renaming = true
     renameOriginalName = String(session.name || "")
@@ -897,7 +928,11 @@ Panel {
             anchors.right: parent.right
             anchors.rightMargin: Style.space(6)
             anchors.verticalCenter: parent.verticalCenter
-            text: root.rows.length + " session" + (root.rows.length === 1 ? "" : "s")
+            text: root.savedSessionCount > 0
+              ? root.runningSessionCount + " running · "
+                + root.savedSessionCount + " saved"
+              : root.runningSessionCount + " session"
+                + (root.runningSessionCount === 1 ? "" : "s")
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
@@ -995,7 +1030,11 @@ Panel {
                 enabled: !root.interactionBusy
                 cursorShape: Qt.PointingHandCursor
                 onEntered: root.selectRow(sessionRow.index)
-                onClicked: root.attachSession(String(sessionRow.modelData.name))
+                onClicked: {
+                  var name = String(sessionRow.modelData.name || "")
+                  if (sessionRow.modelData.running === false) root.recreateSession(name)
+                  else root.attachSession(name)
+                }
               }
 
               DragHandler {
@@ -1028,9 +1067,11 @@ Panel {
                   width: Style.space(7)
                   height: width
                   radius: width / 2
-                  color: Number(sessionRow.modelData.attachedClients || 0) > 0
-                    ? root.attachedSessionColor
-                    : root.unattachedSessionColor
+                  color: sessionRow.modelData.running === false
+                    ? root.dim
+                    : (Number(sessionRow.modelData.attachedClients || 0) > 0
+                      ? root.attachedSessionColor
+                      : root.unattachedSessionColor)
                   anchors.verticalCenter: parent.verticalCenter
                 }
 
@@ -1085,12 +1126,26 @@ Panel {
                   }
 
                   PanelActionButton {
+                    visible: sessionRow.modelData.running !== false
                     iconText: "›"
                     tooltipText: "Session details (→)"
                     foreground: root.dim
                     hoverColor: root.foreground
                     fontFamily: root.fontFamily
                     onClicked: root.openSessionDetail(String(sessionRow.modelData.name || ""))
+                  }
+
+                  PanelActionButton {
+                    visible: sessionRow.modelData.running === false
+                    iconText: "+"
+                    tooltipText: root.hostWidget && root.hostWidget.tmuxAvailable
+                      ? "Recreate session"
+                      : "Install tmux to recreate"
+                    foreground: root.foreground
+                    hoverColor: root.foreground
+                    fontFamily: root.fontFamily
+                    enabled: !!root.hostWidget && root.hostWidget.tmuxAvailable
+                    onClicked: root.recreateSession(String(sessionRow.modelData.name || ""))
                   }
                 }
               }

@@ -27,6 +27,10 @@ assert.equal(model.clientLabel(2), "2 clients")
 assert.equal(model.workspaceLabel({ desktop: { workspace: { id: 8 } } }), "ws 8")
 assert.equal(model.workspaceLabel({ desktop: null }), "")
 assert.equal(
+  model.sessionMeta({ name: "main", favorite: true, running: false }, Date.now()),
+  "Not running · favorite saved",
+)
+assert.equal(
   model.sessionMeta({ windows: 2, createdAt: 100, attachedClients: 0 }, 100 * 1000 + 24 * 3600 * 1000),
   "2 windows · 1d old",
 )

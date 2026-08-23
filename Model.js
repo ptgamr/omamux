@@ -151,6 +151,7 @@ function workspaceLabel(session) {
 
 function sessionMeta(session, nowMs) {
   if (!session) return ""
+  if (session.running === false) return "Not running · favorite saved"
   var meta = plural(session.windows, "window")
     + " · " + formatAge(session.createdAt, nowMs)
   var clients = clientLabel(session.attachedClients)

@@ -82,6 +82,8 @@ assert_json "$listed" 'any(.sessions[]; .name == "alpha" and .windows == 2 and .
   "list should return tmux metadata"
 assert_json "$listed" 'all(.sessions[]; (.nativeOrder | type) == "number")' \
   "list should expose tmux native order for optimistic placement"
+assert_json "$listed" 'all(.sessions[]; .running == true)' \
+  "live tmux sessions should be marked as running"
 
 detail=$($OMAMUX detail alpha)
 assert_json "$detail" '.ok and .session == "alpha" and (.windows | length == 2)' \
@@ -129,13 +131,26 @@ assert_json "$renamed" '.sessions[0].name == "alpha-renamed" and .sessions[0].fa
 $OMAMUX rename alpha-renamed alpha >/dev/null
 
 tmux -L "$SOCKET" kill-session -t '=alpha'
-hidden=$($OMAMUX list)
-assert_json "$hidden" '(.sessions | length == 1) and .sessions[0].name == "beta"' \
-  "missing favorite sessions should stay out of the live list"
-tmux -L "$SOCKET" new-session -d -s alpha
+missing=$($OMAMUX list)
+assert_json "$missing" '(.sessions | length == 2)
+    and .sessions[0].name == "alpha"
+    and .sessions[0].favorite
+    and (.sessions[0].running == false)
+    and .sessions[1].name == "beta"
+    and (.sessions[1].running == true)' \
+  "missing favorites should remain visible in their saved order"
+assert_json "$missing" '.sessions[0]
+    | .windows == 0
+      and .attachedClients == 0
+      and .desktop == null
+      and .nativeOrder == null' \
+  "missing favorites should expose safe placeholder metadata"
+$OMAMUX create alpha >/dev/null
 restored=$($OMAMUX list)
-assert_json "$restored" '.sessions[0].name == "alpha" and .sessions[0].favorite' \
-  "recreated sessions should recover their favorite position"
+assert_json "$restored" '.sessions[0].name == "alpha"
+    and .sessions[0].favorite
+    and (.sessions[0].running == true)' \
+  "recreated sessions should recover their favorite position and running state"
 
 $OMAMUX attach alpha >/dev/null
 mapfile -t attach_args <"$CAPTURE"

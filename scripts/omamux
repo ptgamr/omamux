@@ -290,12 +290,25 @@ list_command() {
     jq -cn \
       --arg host "$HOST_ID" \
       --arg hostname "$hostname_value" \
+      --argjson favorites "$favorites" \
       '{
         ok: true,
         error: "tmux is not installed",
         host: {id: $host, name: $hostname},
         tmux: {available: false, version: ""},
-        sessions: []
+        sessions: [
+          $favorites[] | {
+            name,
+            windows: 0,
+            createdAt: 0,
+            attachedClients: 0,
+            nativeOrder: null,
+            desktop: null,
+            favorite: true,
+            starredAt,
+            running: false
+          }
+        ]
       }'
     return
   fi
@@ -325,12 +338,29 @@ list_command() {
           sessions:
             ([
               $favorites[]
-              | select($byName[.name] != null)
-              | $byName[.name] + {favorite: true, starredAt: .starredAt}
+              | if $byName[.name] != null then
+                  $byName[.name] + {
+                    favorite: true,
+                    starredAt: .starredAt,
+                    running: true
+                  }
+                else
+                  {
+                    name,
+                    windows: 0,
+                    createdAt: 0,
+                    attachedClients: 0,
+                    nativeOrder: null,
+                    desktop: null,
+                    favorite: true,
+                    starredAt,
+                    running: false
+                  }
+                end
             ] + [
               $nativeSessions[]
               | select(.name as $name | ($favoriteNames | index($name)) == null)
-              | . + {favorite: false, starredAt: 0}
+              | . + {favorite: false, starredAt: 0, running: true}
             ])
         }
     '

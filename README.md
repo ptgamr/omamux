@@ -29,7 +29,7 @@ The demo shows session navigation, favorites, reordering, and inline session ren
 - Creates and immediately attaches to a named session.
 - Renames an existing session while preserving its favorite position.
 - Keeps ordered favorites, with drag and keyboard reordering.
-- Keeps missing favorites visible and lets you recreate them with the same name.
+- Preserves favorite sessions that no longer exist, shows them as `Not running`, and provides a one-click option to recreate them with the same name.
 - Shows the windows and panes running inside each session.
 - Supports mouse and keyboard navigation.
 - Refreshes automatically without changing tmux configuration or global options.

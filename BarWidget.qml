@@ -19,6 +19,13 @@ BarWidget {
   property bool refreshPending: false
 
   readonly property int sessionCount: sessions.length
+  readonly property int runningSessionCount: {
+    var count = 0
+    for (var i = 0; i < sessions.length; i++)
+      if (sessions[i].running !== false) count++
+    return count
+  }
+  readonly property int savedSessionCount: sessionCount - runningSessionCount
   readonly property int attachedCount: {
     var count = 0
     for (var i = 0; i < sessions.length; i++)
@@ -102,7 +109,9 @@ BarWidget {
     if (loading && sessionCount === 0) return "Loading tmux sessions…"
     if (!tmuxAvailable) return "tmux is not installed"
     if (errorText !== "") return "Omamux · " + errorText
-    var text = sessionCount + " tmux session" + (sessionCount === 1 ? "" : "s")
+    var text = runningSessionCount + " tmux session"
+      + (runningSessionCount === 1 ? "" : "s")
+    if (savedSessionCount > 0) text += " · " + savedSessionCount + " saved"
     if (attachedCount > 0) text += " · " + attachedCount + " attached"
     return text
   }
