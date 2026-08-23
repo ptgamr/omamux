@@ -33,6 +33,7 @@ Panel {
   property bool dragReordering: false
   property int dragFrom: -1
   property int dragTo: -1
+  property real dragOffset: 0
   property bool favoriteSyncPending: false
   property var expectedFavoriteOrder: []
 
@@ -198,16 +199,18 @@ Panel {
 
     reorderedRows = nextRows
     reorderAction = actionArgs
-    reorderFrom = from
-    reorderTo = to
     cursorActive = true
 
     if (from === to) {
+      reorderFrom = from
+      reorderTo = to
       finishReorder()
       return
     }
 
     reorderAnimating = true
+    reorderFrom = from
+    reorderTo = to
     reorderTimer.restart()
   }
 
@@ -230,6 +233,7 @@ Panel {
         || index < 0 || index >= favoriteCount) return false
     dragFrom = index
     dragTo = index
+    dragOffset = 0
     dragReordering = true
     cursorActive = true
     selectedIndex = index
@@ -238,8 +242,9 @@ Panel {
 
   function updateDrag(offset) {
     if (!dragReordering) return
+    dragOffset = Number(offset || 0)
     var step = sessionRowHeight + sessionRowSpacing
-    var target = dragFrom + Math.round(Number(offset || 0) / step)
+    var target = dragFrom + Math.round(dragOffset / step)
     dragTo = Math.max(0, Math.min(favoriteCount - 1, target))
   }
 
@@ -251,6 +256,7 @@ Panel {
     dragReordering = false
     dragFrom = -1
     dragTo = -1
+    dragOffset = 0
 
     if (from === target) return
     var nextRows = rows.slice(0)
@@ -600,12 +606,42 @@ Panel {
             currentIndex: root.selectedIndex
             ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
+            CursorSurface {
+              id: sessionCursorSurface
+              parent: sessionList.contentItem
+              width: sessionList.width
+              height: root.sessionRowHeight
+              hasCursor: root.cursorActive
+                && root.selectedIndex >= 0
+                && root.selectedIndex < root.rows.length
+              foreground: root.foreground
+              accent: Color.accent
+              z: 0
+              y: {
+                var step = root.sessionRowHeight + root.sessionRowSpacing
+                if (root.dragReordering && root.dragFrom >= 0)
+                  return root.dragFrom * step + root.dragOffset
+                if (root.reorderAnimating && root.reorderFrom >= 0 && root.reorderTo >= 0)
+                  return root.reorderTo * step
+                return Math.max(0, root.selectedIndex) * step
+              }
+
+              Behavior on y {
+                enabled: root.reorderAnimating
+                NumberAnimation {
+                  duration: root.reorderDuration
+                  easing.type: Easing.OutCubic
+                }
+              }
+            }
+
             delegate: CursorSurface {
               id: sessionRow
               required property var modelData
               required property int index
               readonly property bool canReorder: modelData.favorite === true && root.favoriteCount > 1
-              readonly property bool showReorder: canReorder && hasCursor
+              readonly property bool hasSelectionCursor: root.cursorActive && index === root.selectedIndex
+              readonly property bool showReorder: canReorder && hasSelectionCursor
               readonly property bool togglingFavorite: root.reorderAnimating
                 && index === root.reorderFrom
                 && root.reorderAction.length > 1
@@ -618,12 +654,12 @@ Panel {
 
               width: sessionList.width
               height: root.sessionRowHeight
-              hasCursor: root.cursorActive && index === root.selectedIndex
+              hasCursor: false
               foreground: root.foreground
               accent: Color.accent
               z: dragHandler.active
                 || (root.reorderAnimating && index === root.reorderFrom)
-                ? 2 : 0
+                ? 2 : 1
               transform: Translate {
                 y: dragHandler.active ? dragHandler.translation.y : sessionRow.animatedOffset
               }
