@@ -8,6 +8,9 @@ readonly STATE_FILE="${OMAMUX_STATE_FILE:-${STATE_ROOT}/favorites.json}"
 readonly TMUX_BIN="${OMAMUX_TMUX_BIN:-tmux}"
 readonly HYPRCTL_BIN="${OMAMUX_HYPRCTL_BIN:-hyprctl}"
 readonly INPUT_OVERFLOW_STATUS=90
+readonly STATE_NOT_REGULAR_STATUS=91
+readonly STATE_MISSING_STATUS=92
+readonly MAX_STATE_READ_SECONDS=5
 readonly MAX_STATE_BYTES=$((256 * 1024))
 readonly MAX_HYPR_CLIENT_BYTES=$((2 * 1024 * 1024))
 readonly MAX_TMUX_CLIENT_BYTES=$((512 * 1024))
@@ -350,23 +353,51 @@ empty_state() {
   jq -cn --arg host "$HOST_ID" '{schemaVersion: 1, hosts: {($host): {favorites: []}}}'
 }
 
-read_state() {
-  local state status
-  if [[ ! -e $STATE_FILE ]]; then
-    empty_state
-    return
-  fi
+# Read the state through a single open. The descriptor is validated and then
+# read without a second pathname lookup, so the path cannot be swapped for a
+# blocking special file or a different regular file between the two steps.
+# Opening a FIFO for reading blocks until a writer appears, so the open itself
+# is time-bounded rather than merely checked.
+state_file_reader() {
+  local -a limiter=()
+  command -v timeout >/dev/null 2>&1 \
+    && limiter=(timeout -s TERM "$MAX_STATE_READ_SECONDS")
 
-  [[ -f $STATE_FILE ]] || fail "Omamux state path is not a regular file: $STATE_FILE"
-  if bounded_command_output state "$MAX_STATE_BYTES" \
-      head -c "$((MAX_STATE_BYTES + 1))" -- "$STATE_FILE"; then
+  # The open is the only pathname lookup on the success path; a missing file is
+  # distinguished afterwards, where the answer only selects an error message.
+  "${limiter[@]}" bash -c '
+    exec {fd}<"$1" 2>/dev/null || { [[ -e $1 ]] && exit 1 || exit "$2"; }
+    [[ -f /dev/fd/$fd ]] || exit "$3"
+    exec cat <&"$fd"
+  ' _ "$STATE_FILE" "$STATE_MISSING_STATUS" "$STATE_NOT_REGULAR_STATUS"
+}
+
+read_state() {
+  local state status label
+  command_error_excerpt label "$STATE_FILE"
+
+  if bounded_command_output state "$MAX_STATE_BYTES" state_file_reader; then
     :
   else
     status=$?
-    if (( status == INPUT_OVERFLOW_STATUS )); then
-      fail "Omamux state exceeds the $MAX_STATE_BYTES-byte safety limit: $STATE_FILE"
-    fi
-    fail "Unable to read Omamux state: $STATE_FILE"
+    case $status in
+      "$STATE_MISSING_STATUS")
+        empty_state
+        return
+        ;;
+      "$INPUT_OVERFLOW_STATUS")
+        fail "Omamux state exceeds the $MAX_STATE_BYTES-byte safety limit: $label"
+        ;;
+      "$STATE_NOT_REGULAR_STATUS")
+        fail "Omamux state path is not a regular file: $label"
+        ;;
+      124)
+        fail "Timed out reading Omamux state after ${MAX_STATE_READ_SECONDS}s: $label"
+        ;;
+      *)
+        fail "Unable to read Omamux state: $label"
+        ;;
+    esac
   fi
 
   jq -ce \
@@ -384,7 +415,7 @@ read_state() {
         and (.name | utf8bytelength) <= $maxName
         and (.starredAt | type) == "number"))
   ' <<<"$state" 2>/dev/null \
-    || fail "Omamux state is malformed or exceeds safety limits; fix or move $STATE_FILE and retry"
+    || fail "Omamux state is malformed or exceeds safety limits; fix or move $label and retry"
 }
 
 state_favorites() {

@@ -342,6 +342,45 @@ fi
 assert_json "$state_field" '.ok == false and (.error | contains("safety limits"))' \
   "favorite field overflow should be rejected"
 
+# The state file is read through one validated open, so a path swapped for a
+# blocking special file or a non-regular file cannot stall or feed the helper.
+rm -f "$state_file"
+mkfifo "$state_file"
+if fifo_state=$(timeout 20 $OMAMUX list); then
+  fail "a blocking state path should be rejected"
+fi
+assert_json "$fifo_state" \
+  '.ok == false and (.error | contains("Timed out reading Omamux state"))' \
+  "a blocking state path should time out with a structured error"
+rm -f "$state_file"
+
+mkdir "$state_file"
+if dir_state=$($OMAMUX list); then
+  fail "a directory state path should be rejected"
+fi
+assert_json "$dir_state" '.ok == false and (.error | contains("not a regular file"))' \
+  "a non-regular state path should be rejected by the descriptor check"
+rmdir "$state_file"
+
+if device_state=$(OMAMUX_STATE_FILE=/dev/zero $OMAMUX list); then
+  fail "a character device state path should be rejected"
+fi
+assert_json "$device_state" '.ok == false and (.error | contains("not a regular file"))' \
+  "a character device state path should be rejected before it is read"
+
+state_target="$TEST_ROOT/linked-favorites.json"
+printf '{"schemaVersion":1,"hosts":{"local":{"favorites":[{"name":"linked","starredAt":1}]}}}\n' \
+  >"$state_target"
+ln -s "$state_target" "$state_file"
+assert_json "$($OMAMUX list)" 'any(.sessions[]; .name == "linked" and .favorite)' \
+  "a state file symlinked to a regular file should still be read"
+rm -f "$state_file"
+
+ln -s "$TEST_ROOT/absent-favorites.json" "$state_file"
+assert_json "$($OMAMUX list)" '.ok == true' \
+  "a dangling state symlink should read as empty state"
+rm -f "$state_file"
+
 printf '{"schemaVersion":1,"hosts":{"local":{"favorites":[]}}}\n' >"$state_file"
 
 for mode in session-bytes session-rows session-name client-bytes client-rows client-name; do

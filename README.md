@@ -130,4 +130,6 @@ State, Hyprland client data, and tmux client/session/pane data are captured with
 
 Subprocesses that only report success or failure, including a configured `OMAMUX_TERMINAL_LAUNCHER`, have their streams discarded so their output cannot reach or corrupt the JSON result.
 
+The favorites file is read through a single time-bounded open. The descriptor is validated as a regular file and then read without a second pathname lookup, so the path cannot be swapped for a blocking special file or a substituted file between validation and the read.
+
 See [PLAN.md](PLAN.md) for the full local-first design and the later remote-host direction.
