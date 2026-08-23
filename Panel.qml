@@ -38,9 +38,11 @@ Panel {
       if (rows[i].favorite === true) count++
     return count
   }
+  readonly property int sessionRowHeight: Style.space(44)
+  readonly property int sessionRowSpacing: Style.space(4)
   readonly property int listHeight: rows.length > 0
-    ? Math.min(Style.space(440), rows.length * Style.space(62) + Math.max(0, rows.length - 1) * Style.space(6))
-    : Style.space(128)
+    ? Math.min(Style.space(360), rows.length * sessionRowHeight + Math.max(0, rows.length - 1) * sessionRowSpacing)
+    : Style.space(112)
 
   function open() {
     root.controller.show()
@@ -231,8 +233,8 @@ Panel {
     bar: root.bar
     open: root.opened
     focusTarget: keyCatcher
-    contentWidth: panel.fittedContentWidth(Style.space(520))
-    contentHeight: panel.fittedContentHeight(content.implicitHeight, Style.space(700))
+    contentWidth: panel.fittedContentWidth(Style.space(380))
+    contentHeight: panel.fittedContentHeight(content.implicitHeight, Style.space(560))
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -266,7 +268,6 @@ Panel {
           width: parent.width
           title: "Omamux"
           meta: (root.hostWidget ? root.hostWidget.hostName : "local") + " · local tmux"
-          detail: root.rows.length + " session" + (root.rows.length === 1 ? "" : "s")
           foreground: root.foreground
           fontFamily: root.fontFamily
 
@@ -411,11 +412,30 @@ Panel {
           foreground: root.foreground
         }
 
-        PanelSectionHeader {
+        Item {
           width: parent.width
-          text: "SESSIONS"
-          foreground: root.foreground
-          fontFamily: root.fontFamily
+          implicitHeight: Math.max(sessionsHeader.implicitHeight, sessionCount.implicitHeight)
+
+          PanelSectionHeader {
+            id: sessionsHeader
+            anchors.left: parent.left
+            anchors.verticalCenter: parent.verticalCenter
+            text: "SESSIONS"
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+          }
+
+          Text {
+            id: sessionCount
+            anchors.right: parent.right
+            anchors.rightMargin: Style.space(6)
+            anchors.verticalCenter: parent.verticalCenter
+            text: root.rows.length + " session" + (root.rows.length === 1 ? "" : "s")
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            font.bold: true
+          }
         }
 
         Item {
@@ -427,7 +447,7 @@ Panel {
             id: sessionList
             anchors.fill: parent
             model: root.rows
-            spacing: Style.space(6)
+            spacing: root.sessionRowSpacing
             clip: true
             boundsBehavior: Flickable.StopAtBounds
             currentIndex: root.selectedIndex
@@ -438,11 +458,12 @@ Panel {
               required property var modelData
               required property int index
               property real lastDragY: 0
+              readonly property bool canReorder: modelData.favorite === true && root.favoriteCount > 1
+              readonly property bool showReorder: canReorder && hasCursor
 
               width: sessionList.width
-              height: Style.space(62)
+              height: root.sessionRowHeight
               hasCursor: root.cursorActive && index === root.selectedIndex
-              bordered: true
               foreground: root.foreground
               accent: Color.accent
               z: dragHandler.active ? 2 : 0
@@ -474,12 +495,13 @@ Panel {
 
               Row {
                 anchors.fill: parent
-                anchors.leftMargin: Style.space(12)
-                anchors.rightMargin: Style.space(8)
-                spacing: Style.space(10)
+                anchors.leftMargin: Style.space(8)
+                anchors.rightMargin: Style.space(4)
+                spacing: Style.space(8)
 
                 Rectangle {
-                  width: Style.space(8)
+                  id: statusDot
+                  width: Style.space(7)
                   height: width
                   radius: width / 2
                   color: Number(sessionRow.modelData.attachedClients || 0) > 0
@@ -489,7 +511,7 @@ Panel {
                 }
 
                 Column {
-                  width: Math.max(0, parent.width - parent.children[0].width - trailing.width - parent.spacing * 2)
+                  width: Math.max(0, parent.width - statusDot.width - trailing.width - parent.spacing * 2)
                   anchors.verticalCenter: parent.verticalCenter
                   spacing: Style.space(2)
 
@@ -519,7 +541,7 @@ Panel {
                   spacing: Style.space(1)
 
                   Text {
-                    visible: sessionRow.modelData.favorite === true && root.favoriteCount > 1
+                    visible: sessionRow.showReorder
                     text: "≡"
                     color: root.dim
                     font.family: root.fontFamily
@@ -528,7 +550,7 @@ Panel {
                   }
 
                   PanelActionButton {
-                    visible: sessionRow.modelData.favorite === true && root.favoriteCount > 1
+                    visible: sessionRow.showReorder
                     iconText: "↑"
                     tooltipText: "Move favorite up (h)"
                     foreground: root.dim
@@ -539,7 +561,7 @@ Panel {
                   }
 
                   PanelActionButton {
-                    visible: sessionRow.modelData.favorite === true && root.favoriteCount > 1
+                    visible: sessionRow.showReorder
                     iconText: "↓"
                     tooltipText: "Move favorite down (l)"
                     foreground: root.dim
@@ -610,7 +632,7 @@ Panel {
         Text {
           visible: root.rows.length > 0
           width: parent.width
-          text: "↑↓ select · Enter attach · f favorite · h/l reorder · n new · r refresh"
+          text: "Enter attach · f star · h/l order · n new · r refresh"
           color: root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
