@@ -144,19 +144,6 @@ function favoriteOrder(sessions) {
   return names
 }
 
-function sectionedRows(sessions) {
-  var values = Array.isArray(sessions) ? sessions : []
-  var rows = []
-  for (var i = 0; i < values.length; i++) {
-    var original = values[i] || ({})
-    var session = ({})
-    for (var key in original) session[key] = original[key]
-    session.section = original.favorite === true ? "favorites" : "sessions"
-    rows.push(session)
-  }
-  return rows
-}
-
 function toggledFavoriteRows(sessions, index) {
   var rows = Array.isArray(sessions) ? sessions.slice(0) : []
   var source = clampedIndex(index, rows.length)
@@ -170,16 +157,22 @@ function toggledFavoriteRows(sessions, index) {
   if (original.favorite === true) {
     session.favorite = false
     session.starredAt = 0
-    session.section = "sessions"
 
     var target = 0
     while (target < rows.length && rows[target].favorite === true) target++
+    var nativeOrder = Number(session.nativeOrder)
+    if (isFinite(nativeOrder)) {
+      while (target < rows.length
+          && rows[target].favorite !== true
+          && isFinite(Number(rows[target].nativeOrder))
+          && Number(rows[target].nativeOrder) < nativeOrder)
+        target++
+    }
     rows.splice(target, 0, session)
     return { rows: rows, targetIndex: target, favorite: false }
   }
 
   session.favorite = true
-  session.section = "favorites"
   rows.unshift(session)
   return { rows: rows, targetIndex: 0, favorite: true }
 }

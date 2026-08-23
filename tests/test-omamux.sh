@@ -52,6 +52,8 @@ listed=$($OMAMUX list)
 assert_json "$listed" '.sessions | length == 2' "list should return both isolated sessions"
 assert_json "$listed" 'any(.sessions[]; .name == "alpha" and .windows == 2 and .attachedClients == 0)' \
   "list should return tmux metadata"
+assert_json "$listed" 'all(.sessions[]; (.nativeOrder | type) == "number")' \
+  "list should expose tmux native order for optimistic placement"
 
 detail=$($OMAMUX detail alpha)
 assert_json "$detail" '.ok and .session == "alpha" and (.windows | length == 2)' \

@@ -216,7 +216,8 @@ list_command() {
     --arg version "$version" \
     --argjson favorites "$favorites" \
     --argjson sessions "$sessions" '
-      ($sessions | map({key: .name, value: .}) | from_entries) as $byName
+      ($sessions | to_entries | map(.value + {nativeOrder: .key})) as $nativeSessions
+      | ($nativeSessions | map({key: .name, value: .}) | from_entries) as $byName
       | ($favorites | map(.name)) as $favoriteNames
       | {
           ok: true,
@@ -229,7 +230,7 @@ list_command() {
               | select($byName[.name] != null)
               | $byName[.name] + {favorite: true, starredAt: .starredAt}
             ] + [
-              $sessions[]
+              $nativeSessions[]
               | select(.name as $name | ($favoriteNames | index($name)) == null)
               | . + {favorite: false, starredAt: 0}
             ])

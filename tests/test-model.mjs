@@ -58,14 +58,6 @@ assert.equal(
   JSON.stringify(["one", "two"]),
 )
 
-assert.equal(
-  JSON.stringify(model.sectionedRows([
-    { name: "one", favorite: true },
-    { name: "two", favorite: false },
-  ]).map((row) => [row.name, row.section])),
-  JSON.stringify([["one", "favorites"], ["two", "sessions"]]),
-)
-
 const starred = model.toggledFavoriteRows([
   { name: "one", favorite: true },
   { name: "two", favorite: false },
@@ -73,7 +65,6 @@ const starred = model.toggledFavoriteRows([
 ], 2)
 assert.equal(starred.favorite, true)
 assert.equal(starred.targetIndex, 0)
-assert.equal(starred.rows[0].section, "favorites")
 assert.equal(
   JSON.stringify(starred.rows.map((row) => [row.name, row.favorite])),
   JSON.stringify([["three", true], ["one", true], ["two", false]]),
@@ -86,10 +77,22 @@ const unstarred = model.toggledFavoriteRows([
 ], 0)
 assert.equal(unstarred.favorite, false)
 assert.equal(unstarred.targetIndex, 1)
-assert.equal(unstarred.rows[1].section, "sessions")
 assert.equal(
   JSON.stringify(unstarred.rows.map((row) => [row.name, row.favorite])),
   JSON.stringify([["two", true], ["one", false], ["three", false]]),
+)
+
+const rankedUnstarred = model.toggledFavoriteRows([
+  { name: "two", favorite: true, nativeOrder: 2 },
+  { name: "three", favorite: true, nativeOrder: 3 },
+  { name: "zero", favorite: false, nativeOrder: 0 },
+  { name: "one", favorite: false, nativeOrder: 1 },
+  { name: "four", favorite: false, nativeOrder: 4 },
+], 0)
+assert.equal(rankedUnstarred.targetIndex, 3)
+assert.equal(
+  JSON.stringify(rankedUnstarred.rows.map((row) => row.name)),
+  JSON.stringify(["three", "zero", "one", "two", "four"]),
 )
 
 assert.deepEqual(

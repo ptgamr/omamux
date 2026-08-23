@@ -40,6 +40,7 @@ Panel {
   property real dragOffset: 0
   property bool favoriteSyncPending: false
   property var expectedFavoriteOrder: []
+  property string interactionHint: ""
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
@@ -67,13 +68,9 @@ Panel {
   }
   readonly property int sessionRowHeight: Style.space(44)
   readonly property int sessionRowSpacing: Style.space(4)
-  readonly property int otherSessionsHeaderHeight: favoriteCount > 0 && favoriteCount < rows.length
-    ? Style.space(30)
-    : 0
   readonly property int listHeight: rows.length > 0
     ? Math.min(Style.space(360), rows.length * sessionRowHeight
-      + Math.max(0, rows.length - 1) * sessionRowSpacing
-      + otherSessionsHeaderHeight)
+      + Math.max(0, rows.length - 1) * sessionRowSpacing)
     : Style.space(112)
 
   function open() {
@@ -100,7 +97,7 @@ Panel {
   function syncRows() {
     var previousName = selectedSession() ? String(selectedSession().name) : ""
     rows = hostWidget && Array.isArray(hostWidget.sessions)
-      ? Model.sectionedRows(hostWidget.sessions)
+      ? hostWidget.sessions.slice(0)
       : []
 
     var nextIndex = -1
@@ -260,10 +257,7 @@ Panel {
     if (index < 0 || !sessionList) return 0
     var item = sessionList.itemAtIndex(index)
     if (item) return item.y
-    var y = index * (sessionRowHeight + sessionRowSpacing)
-    if (otherSessionsHeaderHeight > 0 && index >= favoriteCount)
-      y += otherSessionsHeaderHeight
-    return y
+    return index * (sessionRowHeight + sessionRowSpacing)
   }
 
   function animateReorder(from, to, nextRows, actionArgs) {
@@ -362,8 +356,17 @@ Panel {
 
   function moveSelectedFavorite(delta) {
     var session = selectedSession()
-    if (!session || session.favorite !== true) return
+    if (!session) return
+    if (session.favorite !== true) {
+      showInteractionHint("Only favorite sessions can be reordered")
+      return
+    }
     moveFavorite(selectedIndex, selectedIndex + delta)
+  }
+
+  function showInteractionHint(message) {
+    interactionHint = message
+    interactionHintTimer.restart()
   }
 
   function startCreate() {
@@ -403,6 +406,7 @@ Panel {
     } else {
       creating = false
       actionError = ""
+      interactionHint = ""
       showingDetail = false
       detailSessionName = ""
       detailWindows = []
@@ -446,6 +450,12 @@ Panel {
       root.syncRows()
       if (root.hostWidget) root.hostWidget.refresh()
     }
+  }
+
+  Timer {
+    id: interactionHintTimer
+    interval: 2200
+    onTriggered: root.interactionHint = ""
   }
 
   Process {
@@ -685,7 +695,7 @@ Panel {
             id: sessionsHeader
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
-            text: root.favoriteCount > 0 ? "FAVORITES" : "SESSIONS"
+            text: "SESSIONS"
             foreground: root.foreground
             fontFamily: root.fontFamily
           }
@@ -719,36 +729,6 @@ Panel {
             boundsBehavior: Flickable.StopAtBounds
             currentIndex: root.selectedIndex
             ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-
-            section.property: "section"
-            section.criteria: ViewSection.FullString
-            section.delegate: Item {
-              required property string section
-
-              width: ListView.view.width
-              height: section === "sessions" && root.favoriteCount > 0
-                ? root.otherSessionsHeaderHeight
-                : 0
-              visible: height > 0
-
-              PanelSeparator {
-                anchors.left: parent.left
-                anchors.leftMargin: Style.space(4)
-                anchors.right: parent.right
-                anchors.rightMargin: Style.space(4)
-                anchors.top: parent.top
-                foreground: root.foreground
-              }
-
-              PanelSectionHeader {
-                anchors.left: parent.left
-                anchors.leftMargin: Style.space(4)
-                anchors.bottom: parent.bottom
-                text: "OTHER SESSIONS"
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-              }
-            }
 
             CursorSurface {
               id: sessionCursorSurface
@@ -1147,8 +1127,10 @@ Panel {
         Text {
           visible: !root.showingDetail && root.rows.length > 0
           width: parent.width
-          text: "j/k move · J/K order · → details · Enter attach · f star"
-          color: root.dim
+          text: root.interactionHint !== ""
+            ? root.interactionHint
+            : "j/k move · J/K order · → details · Enter attach · f star"
+          color: root.interactionHint !== "" ? root.foreground : root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
           horizontalAlignment: Text.AlignHCenter
