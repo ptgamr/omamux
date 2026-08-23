@@ -54,8 +54,13 @@ Panel {
   }
   readonly property int sessionRowHeight: Style.space(44)
   readonly property int sessionRowSpacing: Style.space(4)
+  readonly property int otherSessionsHeaderHeight: favoriteCount > 0 && favoriteCount < rows.length
+    ? Style.space(30)
+    : 0
   readonly property int listHeight: rows.length > 0
-    ? Math.min(Style.space(360), rows.length * sessionRowHeight + Math.max(0, rows.length - 1) * sessionRowSpacing)
+    ? Math.min(Style.space(360), rows.length * sessionRowHeight
+      + Math.max(0, rows.length - 1) * sessionRowSpacing
+      + otherSessionsHeaderHeight)
     : Style.space(112)
 
   function open() {
@@ -82,7 +87,7 @@ Panel {
   function syncRows() {
     var previousName = selectedSession() ? String(selectedSession().name) : ""
     rows = hostWidget && Array.isArray(hostWidget.sessions)
-      ? hostWidget.sessions.slice(0)
+      ? Model.sectionedRows(hostWidget.sessions)
       : []
 
     var nextIndex = -1
@@ -192,6 +197,16 @@ Panel {
     if (reorderAnimating && reorderFrom >= 0 && reorderTo >= 0)
       return Model.reorderOffset(index, reorderFrom, reorderTo, step)
     return 0
+  }
+
+  function sessionItemY(index) {
+    if (index < 0 || !sessionList) return 0
+    var item = sessionList.itemAtIndex(index)
+    if (item) return item.y
+    var y = index * (sessionRowHeight + sessionRowSpacing)
+    if (otherSessionsHeaderHeight > 0 && index >= favoriteCount)
+      y += otherSessionsHeaderHeight
+    return y
   }
 
   function animateReorder(from, to, nextRows, actionArgs) {
@@ -573,7 +588,7 @@ Panel {
             id: sessionsHeader
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
-            text: "SESSIONS"
+            text: root.favoriteCount > 0 ? "FAVORITES" : "SESSIONS"
             foreground: root.foreground
             fontFamily: root.fontFamily
           }
@@ -606,6 +621,36 @@ Panel {
             currentIndex: root.selectedIndex
             ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
+            section.property: "section"
+            section.criteria: ViewSection.FullString
+            section.delegate: Item {
+              required property string section
+
+              width: ListView.view.width
+              height: section === "sessions" && root.favoriteCount > 0
+                ? root.otherSessionsHeaderHeight
+                : 0
+              visible: height > 0
+
+              PanelSeparator {
+                anchors.left: parent.left
+                anchors.leftMargin: Style.space(4)
+                anchors.right: parent.right
+                anchors.rightMargin: Style.space(4)
+                anchors.top: parent.top
+                foreground: root.foreground
+              }
+
+              PanelSectionHeader {
+                anchors.left: parent.left
+                anchors.leftMargin: Style.space(4)
+                anchors.bottom: parent.bottom
+                text: "OTHER SESSIONS"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+              }
+            }
+
             CursorSurface {
               id: sessionCursorSurface
               parent: sessionList.contentItem
@@ -618,12 +663,11 @@ Panel {
               accent: Color.accent
               z: 0
               y: {
-                var step = root.sessionRowHeight + root.sessionRowSpacing
                 if (root.dragReordering && root.dragFrom >= 0)
-                  return root.dragFrom * step + root.dragOffset
+                  return root.sessionItemY(root.dragFrom) + root.dragOffset
                 if (root.reorderAnimating && root.reorderFrom >= 0 && root.reorderTo >= 0)
-                  return root.reorderTo * step
-                return Math.max(0, root.selectedIndex) * step
+                  return root.sessionItemY(root.reorderTo)
+                return root.sessionItemY(root.selectedIndex)
               }
 
               Behavior on y {
