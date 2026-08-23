@@ -295,6 +295,42 @@ create_command() {
   jq -cn --arg name "$name" '{ok: true, action: "create", session: $name}'
 }
 
+rename_command() {
+  local old_name=${1:-} new_name=${2:-}
+  local favorites next output
+  validate_session_name "$old_name"
+  validate_session_name "$new_name"
+  tmux_available || fail "tmux is not installed"
+  tmux_command has-session -t "=$old_name" 2>/dev/null \
+    || fail "tmux session '$old_name' no longer exists"
+
+  if [[ $old_name == "$new_name" ]]; then
+    jq -cn --arg name "$new_name" --arg previous "$old_name" \
+      '{ok: true, action: "rename", session: $name, previousSession: $previous}'
+    return
+  fi
+
+  if tmux_command has-session -t "=$new_name" 2>/dev/null; then
+    fail "tmux session '$new_name' already exists"
+  fi
+
+  capture_json favorites state_favorites
+  next=$(jq -c --arg old "$old_name" --arg new "$new_name" '
+    map(if .name == $old then .name = $new else . end)
+  ' <<<"$favorites")
+
+  if ! output=$(tmux_command rename-session -t "=$old_name" "$new_name" 2>&1); then
+    fail "Unable to rename tmux session '$old_name': $output"
+  fi
+
+  if jq -e --arg old "$old_name" 'any(.[]; .name == $old)' <<<"$favorites" >/dev/null; then
+    write_favorites "$next"
+  fi
+
+  jq -cn --arg name "$new_name" --arg previous "$old_name" \
+    '{ok: true, action: "rename", session: $name, previousSession: $previous}'
+}
+
 favorite_toggle_command() {
   local name=${1:-}
   local favorites now next favorite
@@ -347,7 +383,7 @@ favorite_reorder_command() {
 }
 
 usage() {
-  fail "Usage: omamux list | detail <name> | attach <name> | create <name> | favorite toggle <name> | favorite reorder <name>..." 64
+  fail "Usage: omamux list | detail <name> | attach <name> | create <name> | rename <old-name> <new-name> | favorite toggle <name> | favorite reorder <name>..." 64
 }
 
 main() {
@@ -368,6 +404,10 @@ main() {
     create)
       (( $# == 2 )) || usage
       create_command "$2"
+      ;;
+    rename)
+      (( $# == 3 )) || usage
+      rename_command "$2" "$3"
       ;;
     favorite)
       local subcommand=${2:-}

@@ -12,6 +12,11 @@ assert.equal(model.validationError("bad.name"), "Session names cannot contain . 
 assert.equal(model.validationError("bad:name"), "Session names cannot contain . or :")
 assert.equal(model.validationError("client work; echo safe"), "")
 assert.equal(model.normalizedSessionName("  main  "), "main")
+assert.equal(
+  model.themeColor('blue = "#7daea3"\nyellow = "#d8a657"', "blue", "#000000"),
+  "#7daea3",
+)
+assert.equal(model.themeColor('blue = "#7daea3"', "yellow", "#e0af68"), "#e0af68")
 
 assert.equal(model.suggestSessionName([]), "main")
 assert.equal(model.suggestSessionName([{ name: "main" }, { name: "main-2" }]), "main-3")

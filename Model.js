@@ -79,6 +79,13 @@ function normalizedSessionName(value) {
   return String(value || "").trim()
 }
 
+function themeColor(raw, name, fallback) {
+  var key = String(name || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  var match = String(raw || "").match(new RegExp("^\\s*" + key
+    + "\\s*=\\s*[\\\"']?(#[0-9A-Fa-f]{6})", "m"))
+  return match ? match[1] : fallback
+}
+
 function suggestSessionName(sessions) {
   var taken = ({})
   var rows = Array.isArray(sessions) ? sessions : []

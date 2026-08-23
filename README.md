@@ -9,6 +9,7 @@ Version `0.1.0` is intentionally local-only. Remote host support is planned afte
 - Lists local tmux sessions with window count, age, and attached client count.
 - Opens an exact session in Omarchy's configured terminal.
 - Creates and immediately attaches to a named session.
+- Renames an existing session while preserving its favorite position.
 - Keeps ordered favorites, with drag and keyboard reordering.
 - Shows the windows and panes running inside each session.
 - Supports mouse and keyboard navigation.
@@ -44,8 +45,10 @@ omarchy bar move io.github.ptgamr.omamux --section right
 - Click `☆`/`★`, or press `f`, to toggle a favorite.
 - Drag a favorite row, or press `Shift+j`/`Shift+k`, to reorder it.
 - Press Right to inspect a session's windows and panes, then Left to go back.
-- Click `+`, or press `n`, to create a session.
-- Press `r` to refresh and Escape to close.
+- Click `+`, or press `Shift+C`, to create a session.
+- Press `r` to rename the selected session, then Enter to confirm or Escape to cancel.
+- Press `Shift+R`, use the refresh button in the panel header, or right-click the bar widget, to refresh.
+- Press Escape to close.
 
 New favorites are inserted at the top. Favorites for sessions that no longer exist remain saved but hidden; recreating the same session restores its previous favorite position.
 

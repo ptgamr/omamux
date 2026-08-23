@@ -78,6 +78,17 @@ reordered=$($OMAMUX list)
 assert_json "$reordered" '.sessions[0].name == "alpha" and .sessions[1].name == "beta"' \
   "favorite reorder should persist display order"
 
+$OMAMUX rename alpha alpha-renamed >/dev/null
+tmux -L "$SOCKET" has-session -t '=alpha-renamed' \
+  || fail "rename should update the exact tmux session"
+if tmux -L "$SOCKET" has-session -t '=alpha' 2>/dev/null; then
+  fail "rename should remove the previous tmux session name"
+fi
+renamed=$($OMAMUX list)
+assert_json "$renamed" '.sessions[0].name == "alpha-renamed" and .sessions[0].favorite' \
+  "rename should preserve favorite identity and order"
+$OMAMUX rename alpha-renamed alpha >/dev/null
+
 tmux -L "$SOCKET" kill-session -t '=alpha'
 hidden=$($OMAMUX list)
 assert_json "$hidden" '(.sessions | length == 1) and .sessions[0].name == "beta"' \
@@ -101,6 +112,12 @@ mapfile -t create_args <"$CAPTURE"
 
 if $OMAMUX create 'bad.name' >/dev/null; then
   fail "create should reject dots in session names"
+fi
+if $OMAMUX rename alpha beta >/dev/null; then
+  fail "rename should reject an existing session name"
+fi
+if $OMAMUX rename alpha 'bad.name' >/dev/null; then
+  fail "rename should reject dots in session names"
 fi
 if $OMAMUX favorite reorder alpha alpha >/dev/null; then
   fail "favorite reorder should reject duplicates"

@@ -20,7 +20,10 @@ Panel {
   property int selectedIndex: -1
   property bool cursorActive: false
   property bool creating: false
-  property string createText: ""
+  property bool renaming: false
+  property string renameOriginalName: ""
+  property string editText: ""
+  property string preferredSelectionName: ""
   property bool showingDetail: false
   property string detailSessionName: ""
   property var detailWindows: []
@@ -45,10 +48,13 @@ Panel {
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
   readonly property color dim: Color.muted
-  readonly property color availableColor: Color.accent
+  readonly property color iconAccentColor: Color.accent
+  property color attachedSessionColor: "#7aa2f7"
+  property color unattachedSessionColor: "#e0af68"
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property bool actionBusy: actionProcess.running
   readonly property bool detailLoading: detailProcess.running
+  readonly property bool editingName: creating || renaming
   readonly property bool interactionBusy: actionBusy || reorderAnimating || dragReordering || favoriteSyncPending
   readonly property int reorderDuration: 180
   readonly property int dragDisplaceDuration: 110
@@ -79,7 +85,7 @@ Panel {
   }
 
   function close() {
-    cancelCreate()
+    cancelNameEdit()
     root.controller.hide()
   }
 
@@ -95,7 +101,9 @@ Panel {
   }
 
   function syncRows() {
-    var previousName = selectedSession() ? String(selectedSession().name) : ""
+    var previousName = preferredSelectionName !== ""
+      ? preferredSelectionName
+      : (selectedSession() ? String(selectedSession().name) : "")
     rows = hostWidget && Array.isArray(hostWidget.sessions)
       ? hostWidget.sessions.slice(0)
       : []
@@ -107,6 +115,7 @@ Panel {
     }
     if (nextIndex < 0 && rows.length > 0) nextIndex = 0
     selectedIndex = nextIndex
+    if (preferredSelectionName === previousName) preferredSelectionName = ""
     revealSelection()
   }
 
@@ -156,17 +165,23 @@ Panel {
   function applyAction(raw) {
     var result = Model.parseActionPayload(raw, "Omamux command failed")
     var shouldClose = closeAfterAction && result.ok
+    var completedAction = actionKind
     closeAfterAction = false
     actionKind = ""
 
     if (result.ok) {
       actionError = ""
+      if (completedAction === "rename") {
+        preferredSelectionName = String(result.session || "")
+        cancelNameEdit()
+      }
       if (hostWidget) hostWidget.refresh()
       if (shouldClose) close()
     } else {
       favoriteSyncTimer.stop()
       favoriteSyncPending = false
       expectedFavoriteOrder = []
+      preferredSelectionName = ""
       actionError = result.error
       syncRows()
     }
@@ -369,31 +384,74 @@ Panel {
     interactionHintTimer.restart()
   }
 
+  function loadSessionColors(raw) {
+    attachedSessionColor = Model.themeColor(raw, "blue", "#7aa2f7")
+    unattachedSessionColor = Model.themeColor(raw, "yellow", "#e0af68")
+  }
+
   function startCreate() {
     if (showingDetail || interactionBusy || !hostWidget || !hostWidget.tmuxAvailable) return
     creating = true
+    renaming = false
+    renameOriginalName = ""
     actionError = ""
-    createText = Model.suggestSessionName(rows)
+    editText = Model.suggestSessionName(rows)
     Qt.callLater(function() {
-      createField.selectAll()
-      createField.forceActiveFocus()
+      nameField.selectAll()
+      nameField.forceActiveFocus()
     })
   }
 
-  function cancelCreate() {
+  function startRename() {
+    if (showingDetail || interactionBusy || !hostWidget || !hostWidget.tmuxAvailable) return
+    var session = selectedSession()
+    if (!session) return
     creating = false
-    createText = ""
+    renaming = true
+    renameOriginalName = String(session.name || "")
+    editText = renameOriginalName
+    actionError = ""
+    Qt.callLater(function() {
+      nameField.selectAll()
+      nameField.forceActiveFocus()
+    })
+  }
+
+  function cancelNameEdit() {
+    creating = false
+    renaming = false
+    renameOriginalName = ""
+    editText = ""
     if (opened) Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
 
+  function submitNameEdit() {
+    if (renaming) renameSession()
+    else createSession()
+  }
+
   function createSession() {
-    var name = Model.normalizedSessionName(createText)
+    var name = Model.normalizedSessionName(editText)
     var error = Model.validationError(name)
     if (error !== "") {
       actionError = error
       return
     }
     runAction(["create", name], true)
+  }
+
+  function renameSession() {
+    var name = Model.normalizedSessionName(editText)
+    var error = Model.validationError(name)
+    if (error !== "") {
+      actionError = error
+      return
+    }
+    if (name === renameOriginalName) {
+      cancelNameEdit()
+      return
+    }
+    runAction(["rename", renameOriginalName, name], false)
   }
 
   onOpenedChanged: {
@@ -405,6 +463,9 @@ Panel {
       Qt.callLater(function() { keyCatcher.forceActiveFocus() })
     } else {
       creating = false
+      renaming = false
+      renameOriginalName = ""
+      editText = ""
       actionError = ""
       interactionHint = ""
       showingDetail = false
@@ -458,6 +519,13 @@ Panel {
     onTriggered: root.interactionHint = ""
   }
 
+  FileView {
+    path: Color.currentThemePath + "/colors.toml"
+    watchChanges: true
+    onLoaded: root.loadSessionColors(text())
+    onFileChanged: reload()
+  }
+
   Process {
     id: actionProcess
     stdout: StdioCollector {
@@ -487,7 +555,7 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      blocked: root.creating
+      blocked: root.editingName
 
       onMoveRequested: function(dx, dy) {
         if (dy !== 0) root.moveSelection(dy)
@@ -505,9 +573,11 @@ Panel {
           if (!root.showingDetail) root.moveSelectedFavorite(1)
         } else if (text === "K") {
           if (!root.showingDetail) root.moveSelectedFavorite(-1)
-        } else if (text === "r" || text === "R") {
+        } else if (text === "r") {
+          root.startRename()
+        } else if (text === "R") {
           if (root.hostWidget) root.hostWidget.refresh()
-        } else if (text === "n" || text === "N") {
+        } else if (text === "C") {
           root.startCreate()
         } else if (text === "f" || text === "F") {
           if (root.showingDetail) return
@@ -535,7 +605,7 @@ Panel {
               width: Style.font.display
               height: width
               paneColor: root.dim
-              accentColor: root.availableColor
+              accentColor: root.iconAccentColor
             }
           }
 
@@ -555,7 +625,7 @@ Panel {
               PanelActionButton {
                 visible: !root.showingDetail
                 iconText: "󰑐"
-                tooltipText: "Refresh sessions (r)"
+                tooltipText: "Refresh sessions (Shift+R)"
                 foreground: root.foreground
                 fontFamily: root.fontFamily
                 onClicked: if (root.hostWidget) root.hostWidget.refresh()
@@ -564,7 +634,7 @@ Panel {
               PanelActionButton {
                 visible: !root.showingDetail
                 iconText: "+"
-                tooltipText: "New session (n)"
+                tooltipText: "New session (Shift+C)"
                 foreground: root.foreground
                 fontFamily: root.fontFamily
                 enabled: !!root.hostWidget && root.hostWidget.tmuxAvailable
@@ -604,7 +674,7 @@ Panel {
         }
 
         BorderSurface {
-          visible: root.creating
+          visible: root.editingName
           width: parent.width
           implicitHeight: createColumn.implicitHeight + Style.space(20)
           color: Style.selectedFillFor(root.foreground, Color.accent)
@@ -621,7 +691,7 @@ Panel {
             spacing: Style.space(8)
 
             PanelSectionHeader {
-              text: "NEW SESSION"
+              text: root.renaming ? "RENAME SESSION" : "NEW SESSION"
               foreground: root.foreground
               fontFamily: root.fontFamily
             }
@@ -631,18 +701,18 @@ Panel {
               spacing: Style.space(8)
 
               TextField {
-                id: createField
+                id: nameField
                 width: parent.width - createButton.width - cancelButton.width - parent.spacing * 2
-                text: root.createText
+                text: root.editText
                 placeholderText: "main"
                 foreground: root.foreground
-                onTextChanged: root.createText = text
+                onTextChanged: root.editText = text
                 Keys.onPressed: function(event) {
                   if (event.key === Qt.Key_Escape) {
-                    root.cancelCreate()
+                    root.cancelNameEdit()
                     event.accepted = true
                   } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-                    root.createSession()
+                    root.submitNameEdit()
                     event.accepted = true
                   }
                 }
@@ -650,12 +720,15 @@ Panel {
 
               Button {
                 id: createButton
-                text: "Create"
+                text: root.renaming ? "Rename" : "Create"
                 bordered: true
                 foreground: root.foreground
                 fontFamily: root.fontFamily
-                enabled: Model.validSessionName(root.createText) && !root.interactionBusy
-                onClicked: root.createSession()
+                enabled: Model.validSessionName(root.editText)
+                  && (!root.renaming
+                    || Model.normalizedSessionName(root.editText) !== root.renameOriginalName)
+                  && !root.interactionBusy
+                onClicked: root.submitNameEdit()
               }
 
               Button {
@@ -664,16 +737,18 @@ Panel {
                 foreground: root.foreground
                 fontFamily: root.fontFamily
                 enabled: !root.interactionBusy
-                onClicked: root.cancelCreate()
+                onClicked: root.cancelNameEdit()
               }
             }
 
             Text {
               width: parent.width
-              text: Model.validationError(root.createText) !== ""
-                ? Model.validationError(root.createText)
-                : "tmux -u attach-session -t =" + Model.normalizedSessionName(root.createText)
-              color: Model.validationError(root.createText) !== "" ? root.urgent : root.dim
+              text: Model.validationError(root.editText) !== ""
+                ? Model.validationError(root.editText)
+                : (root.renaming
+                  ? "Rename " + root.renameOriginalName + " to " + Model.normalizedSessionName(root.editText)
+                  : "tmux -u attach-session -t =" + Model.normalizedSessionName(root.editText))
+              color: Model.validationError(root.editText) !== "" ? root.urgent : root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
               elide: Text.ElideRight
@@ -837,8 +912,8 @@ Panel {
                   height: width
                   radius: width / 2
                   color: Number(sessionRow.modelData.attachedClients || 0) > 0
-                    ? root.urgent
-                    : root.availableColor
+                    ? root.attachedSessionColor
+                    : root.unattachedSessionColor
                   anchors.verticalCenter: parent.verticalCenter
                 }
 
@@ -1129,7 +1204,7 @@ Panel {
           width: parent.width
           text: root.interactionHint !== ""
             ? root.interactionHint
-            : "j/k move · J/K order · → details · Enter attach · f star"
+            : "j/k move · J/K order · r rename · R refresh · C new · → details · Enter attach · f star"
           color: root.interactionHint !== "" ? root.foreground : root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
