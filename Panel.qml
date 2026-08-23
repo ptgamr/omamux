@@ -271,11 +271,11 @@ Panel {
           fontFamily: root.fontFamily
 
           iconComponent: Component {
-            Text {
-              text: ""
-              color: root.foreground
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.display
+            OmamuxIcon {
+              width: Style.font.display
+              height: width
+              paneColor: root.dim
+              accentColor: root.availableColor
             }
           }
 

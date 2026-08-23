@@ -151,13 +151,19 @@ BarWidget {
     function refresh(): void { root.broadcast("refresh") }
   }
 
-  WidgetButton {
+  BarIconButton {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: " " + (root.loading && root.sessionCount === 0 ? "…" : root.sessionCount)
     tooltipText: root.tooltip()
-    horizontalMargin: 8.5
+    iconComponent: Component {
+      OmamuxIcon {
+        contentScale: 0.72
+        paneColor: Color.muted
+        accentColor: Color.accent
+      }
+    }
+
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.RightButton) root.refresh()
       else root.toggle()
