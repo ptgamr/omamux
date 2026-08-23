@@ -1,6 +1,6 @@
 # Omamux
 
-Omamux is a local tmux session picker for the Omarchy Quattro bar. It brings the session workflow from [TermRover.sh](https://termrover.sh/) to the desktop while using Omarchy's native panel components and current theme.
+Omamux is a local tmux session picker for the Omarchy Quattro bar. It brings flagship session picker from [TermRover.sh](https://termrover.sh/) to Omarchy.
 
 Version `0.1.0` is intentionally local-only. Remote host support is planned after the local workflow is stable.
 
@@ -19,7 +19,7 @@ The demo shows session navigation, favorites, reordering, and inline session ren
 - `R` (`Shift+r`): refresh sessions.
 - `C` (`Shift+c`): create a session.
 - Right/Left: open session details or return to the session list.
-- Enter: attach to the selection, or focus its existing local window and workspace.
+- Enter: attach to the selection, focus its existing local window, or recreate a saved session that is not running.
 
 ## Features
 
@@ -29,6 +29,7 @@ The demo shows session navigation, favorites, reordering, and inline session ren
 - Creates and immediately attaches to a named session.
 - Renames an existing session while preserving its favorite position.
 - Keeps ordered favorites, with drag and keyboard reordering.
+- Keeps missing favorites visible and lets you recreate them with the same name.
 - Shows the windows and panes running inside each session.
 - Supports mouse and keyboard navigation.
 - Refreshes automatically without changing tmux configuration or global options.
@@ -69,8 +70,9 @@ omarchy bar move io.github.ptgamr.omamux --section right
 - Press `r` to rename the selected session, then Enter to confirm or Escape to cancel.
 - Press `Shift+R`, use the refresh button in the panel header, or right-click the bar widget, to refresh.
 - Press Escape to close.
+- Missing favorites are labeled `Not running`; select one and press Enter or click `+` to recreate and attach to it.
 
-New favorites are inserted at the top. Favorites for sessions that no longer exist remain saved but hidden; recreating the same session restores its previous favorite position.
+New favorites are inserted at the top. Favorites for sessions that no longer exist remain visible in their saved order, where they can be reordered, removed, or recreated with the same name.
 
 When a selected session is already attached in a local Hyprland terminal, Omamux switches to that window's workspace and focuses it. Remote-only attachments do not count as local windows. Selecting a different window or pane in a session with attached clients requires a second Enter because changing tmux's active target affects every client attached to that session.
 
