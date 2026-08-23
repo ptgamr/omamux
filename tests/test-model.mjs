@@ -24,9 +24,20 @@ assert.equal(model.formatAge(100, 100 * 1000 + 30 * 1000), "<1m old")
 assert.equal(model.formatAge(100, 100 * 1000 + 3 * 3600 * 1000), "3h old")
 assert.equal(model.clientLabel(0), "")
 assert.equal(model.clientLabel(2), "2 clients")
+assert.equal(model.workspaceLabel({ desktop: { workspace: { id: 8 } } }), "ws 8")
+assert.equal(model.workspaceLabel({ desktop: null }), "")
 assert.equal(
   model.sessionMeta({ windows: 2, createdAt: 100, attachedClients: 0 }, 100 * 1000 + 24 * 3600 * 1000),
   "2 windows · 1d old",
+)
+assert.equal(
+  model.sessionMeta({
+    windows: 2,
+    createdAt: 100,
+    attachedClients: 1,
+    desktop: { workspace: { id: 8 } },
+  }, 100 * 1000 + 24 * 3600 * 1000),
+  "2 windows · 1d old · 1 client · ws 8",
 )
 assert.equal(model.movedSelection(0, 3, 1, false), 0)
 assert.equal(model.movedSelection(0, 3, -1, false), 2)

@@ -6,6 +6,7 @@ readonly HOST_ID="local"
 readonly STATE_ROOT="${XDG_STATE_HOME:-${HOME}/.local/state}/omamux"
 readonly STATE_FILE="${OMAMUX_STATE_FILE:-${STATE_ROOT}/favorites.json}"
 readonly TMUX_BIN="${OMAMUX_TMUX_BIN:-tmux}"
+readonly HYPRCTL_BIN="${OMAMUX_HYPRCTL_BIN:-hyprctl}"
 
 TMUX_ARGS=()
 if [[ -n ${OMAMUX_TMUX_SOCKET:-} ]]; then
@@ -60,6 +61,98 @@ tmux_available() {
 
 tmux_command() {
   "$TMUX_BIN" "${TMUX_ARGS[@]}" "$@"
+}
+
+process_parent() {
+  local pid=$1 key value
+  [[ -r /proc/$pid/status ]] || return 1
+  while read -r key value _; do
+    if [[ $key == "PPid:" ]]; then
+      printf '%s\n' "$value"
+      return 0
+    fi
+  done <"/proc/$pid/status"
+  return 1
+}
+
+hypr_clients_json() {
+  local clients
+  command -v "$HYPRCTL_BIN" >/dev/null 2>&1 || return 1
+  clients=$($HYPRCTL_BIN clients -j 2>/dev/null) || return 1
+  jq -ce 'select(type == "array")' <<<"$clients" 2>/dev/null
+}
+
+hypr_window_for_process_json() {
+  local ancestor=$1 hypr_clients=$2 match parent depth=0
+  while [[ $ancestor =~ ^[0-9]+$ ]] && (( ancestor > 1 && depth < 64 )); do
+    match=$(jq -c --argjson pid "$ancestor" '
+      first(.[] | select(.pid == $pid) | {
+        address,
+        pid,
+        class,
+        title,
+        workspace: (.workspace // {})
+      }) // empty
+    ' <<<"$hypr_clients")
+    if [[ -n $match ]]; then
+      printf '%s\n' "$match"
+      return 0
+    fi
+    parent=$(process_parent "$ancestor") || break
+    [[ $parent != "$ancestor" ]] || break
+    ancestor=$parent
+    ((depth += 1))
+  done
+  return 1
+}
+
+local_desktop_client_json() {
+  local name=$1 hypr_clients clients activity pid match
+  hypr_clients=$(hypr_clients_json) || return 1
+  clients=$(tmux_command list-clients -t "=$name" \
+    -F $'#{client_activity}\t#{client_pid}' 2>/dev/null) || return 1
+
+  while IFS=$'\t' read -r activity pid; do
+    [[ $pid =~ ^[0-9]+$ ]] || continue
+    if match=$(hypr_window_for_process_json "$pid" "$hypr_clients"); then
+      printf '%s\n' "$match"
+      return 0
+    fi
+  done < <(printf '%s\n' "$clients" | sort -t $'\t' -k1,1nr)
+
+  return 1
+}
+
+local_desktop_sessions_json() {
+  local hypr_clients clients name activity pid match desktops='{}'
+  hypr_clients=$(hypr_clients_json) || { printf '{}\n'; return; }
+  clients=$(tmux_command list-clients \
+    -F $'#{session_name}\t#{client_activity}\t#{client_pid}' 2>/dev/null) \
+    || { printf '{}\n'; return; }
+
+  while IFS=$'\t' read -r name activity pid; do
+    [[ -n $name && $pid =~ ^[0-9]+$ ]] || continue
+    if jq -e --arg name "$name" 'has($name)' <<<"$desktops" >/dev/null; then
+      continue
+    fi
+    if match=$(hypr_window_for_process_json "$pid" "$hypr_clients"); then
+      desktops=$(jq -c --arg name "$name" --argjson window "$match" \
+        '.[$name] = $window' <<<"$desktops")
+    fi
+  done < <(printf '%s\n' "$clients" | sort -t $'\t' -k1,1 -k2,2nr)
+
+  printf '%s\n' "$desktops"
+}
+
+focus_desktop_address() {
+  local address=$1
+  [[ $address =~ ^0x[0-9A-Fa-f]+$ ]] || return 1
+
+  # Hyprland 0.55+ dispatchers use Lua expressions. Keep the legacy form as
+  # a fallback so Omamux remains usable on older Omarchy releases.
+  "$HYPRCTL_BIN" dispatch \
+    "hl.dsp.focus({ window = \"address:$address\" })" >/dev/null 2>&1 \
+    || "$HYPRCTL_BIN" dispatch focuswindow "address:$address" >/dev/null 2>&1
 }
 
 empty_state() {
@@ -189,7 +282,7 @@ list_session_detail_json() {
 }
 
 list_command() {
-  local hostname_value favorites sessions version
+  local hostname_value favorites sessions desktop_sessions version
   hostname_value=$(hostname 2>/dev/null || printf 'local')
   capture_json favorites state_favorites
 
@@ -208,6 +301,7 @@ list_command() {
   fi
 
   capture_json sessions list_sessions_json
+  desktop_sessions=$(local_desktop_sessions_json)
   version=$(tmux_command -V 2>/dev/null || true)
 
   jq -cn \
@@ -215,8 +309,12 @@ list_command() {
     --arg hostname "$hostname_value" \
     --arg version "$version" \
     --argjson favorites "$favorites" \
-    --argjson sessions "$sessions" '
-      ($sessions | to_entries | map(.value + {nativeOrder: .key})) as $nativeSessions
+    --argjson sessions "$sessions" \
+    --argjson desktops "$desktop_sessions" '
+      ($sessions | to_entries | map(.value + {
+        nativeOrder: .key,
+        desktop: ($desktops[.value.name] // null)
+      })) as $nativeSessions
       | ($nativeSessions | map({key: .name, value: .}) | from_entries) as $byName
       | ($favorites | map(.name)) as $favoriteNames
       | {
@@ -269,12 +367,48 @@ launch_terminal() {
       </dev/null >/dev/null 2>&1 &)
 }
 
+select_attach_target() {
+  local name=$1 window_index=${2:-} pane_id=${3:-} pane_identity
+  [[ -n $window_index ]] || return 0
+  [[ $window_index =~ ^[0-9]+$ ]] || fail "Window index must be a non-negative number"
+  tmux_command display-message -p -t "=$name:$window_index" '#{window_id}' >/dev/null 2>&1 \
+    || fail "tmux window '$name:$window_index' no longer exists"
+
+  if [[ -n $pane_id ]]; then
+    [[ $pane_id =~ ^%[0-9]+$ ]] || fail "Pane ID is invalid"
+    pane_identity=$(tmux_command display-message -p -t "$pane_id" \
+      $'#{session_name}\t#{window_index}' 2>/dev/null) \
+      || fail "tmux pane '$pane_id' no longer exists"
+    [[ $pane_identity == "$name"$'\t'"$window_index" ]] \
+      || fail "tmux pane '$pane_id' is not in '$name:$window_index'"
+  fi
+
+  tmux_command select-window -t "=$name:$window_index" >/dev/null 2>&1 \
+    || fail "Unable to select tmux window '$name:$window_index'"
+  if [[ -n $pane_id ]]; then
+    tmux_command select-pane -t "$pane_id" >/dev/null 2>&1 \
+      || fail "Unable to select tmux pane '$pane_id'"
+  fi
+}
+
 attach_command() {
-  local name=${1:-}
+  local name=${1:-} window_index=${2:-} pane_id=${3:-}
+  local desktop address
   validate_session_name "$name"
   tmux_available || fail "tmux is not installed"
   tmux_command has-session -t "=$name" 2>/dev/null \
     || fail "tmux session '$name' no longer exists"
+
+  select_attach_target "$name" "$window_index" "$pane_id"
+
+  if desktop=$(local_desktop_client_json "$name"); then
+    address=$(jq -r '.address // empty' <<<"$desktop")
+    if [[ -n $address ]] && focus_desktop_address "$address"; then
+      jq -cn --arg name "$name" --argjson window "$desktop" \
+        '{ok: true, action: "focus", session: $name, window: $window}'
+      return
+    fi
+  fi
 
   launch_terminal "$name" attach-session
   jq -cn --arg name "$name" '{ok: true, action: "attach", session: $name}'
@@ -383,7 +517,7 @@ favorite_reorder_command() {
 }
 
 usage() {
-  fail "Usage: omamux list | detail <name> | attach <name> | create <name> | rename <old-name> <new-name> | favorite toggle <name> | favorite reorder <name>..." 64
+  fail "Usage: omamux list | detail <name> | attach <name> [window-index [pane-id]] | create <name> | rename <old-name> <new-name> | favorite toggle <name> | favorite reorder <name>..." 64
 }
 
 main() {
@@ -398,8 +532,8 @@ main() {
       detail_command "$2"
       ;;
     attach)
-      (( $# == 2 )) || usage
-      attach_command "$2"
+      (( $# >= 2 && $# <= 4 )) || usage
+      attach_command "$2" "${3:-}" "${4:-}"
       ;;
     create)
       (( $# == 2 )) || usage

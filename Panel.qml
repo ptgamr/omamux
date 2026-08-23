@@ -46,6 +46,7 @@ Panel {
   property bool favoriteSyncPending: false
   property var expectedFavoriteOrder: []
   property string interactionHint: ""
+  property string pendingAttachTargetKey: ""
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
@@ -150,6 +151,7 @@ Panel {
 
   function moveDetailSelection(delta) {
     if (!showingDetail || detailRows.length === 0 || interactionBusy) return
+    clearAttachConfirmation()
     selectedDetailIndex = Model.movedSelection(
       selectedDetailIndex, detailRows.length, delta, detailCursorActive)
     detailCursorActive = true
@@ -165,14 +167,69 @@ Panel {
 
   function selectDetailRow(index) {
     if (!showingDetail || interactionBusy) return
+    if (selectedDetailIndex !== index) clearAttachConfirmation()
     detailCursorActive = true
     selectedDetailIndex = Model.clampedIndex(index, detailRows.length)
+  }
+
+  function selectedDetailRow() {
+    if (selectedDetailIndex < 0 || selectedDetailIndex >= detailRows.length) return null
+    return detailRows[selectedDetailIndex]
+  }
+
+  function detailSession() {
+    for (var i = 0; i < rows.length; i++)
+      if (String(rows[i].name || "") === detailSessionName) return rows[i]
+    return null
+  }
+
+  function detailTargetKey(item) {
+    if (!item) return ""
+    var windowIndex = Number((item.window || ({})).index)
+    if (item.kind === "pane")
+      return "pane:" + windowIndex + ":" + String((item.pane || ({})).id || "")
+    return "window:" + windowIndex
+  }
+
+  function detailTargetChangesView(item) {
+    if (!item) return false
+    var window = item.window || ({})
+    if (item.kind === "pane")
+      return window.active !== true || (item.pane || ({})).active !== true
+    return window.active !== true
+  }
+
+  function clearAttachConfirmation() {
+    pendingAttachTargetKey = ""
+    interactionHint = ""
+    interactionHintTimer.stop()
+  }
+
+  function activateDetailSelection() {
+    var item = selectedDetailRow()
+    if (!item || detailSessionName === "") return
+    var session = detailSession()
+    var clients = Number(session && session.attachedClients || 0)
+    var targetKey = detailTargetKey(item)
+    if (clients > 0 && detailTargetChangesView(item)
+        && pendingAttachTargetKey !== targetKey) {
+      pendingAttachTargetKey = targetKey
+      interactionHint = clients + " client" + (clients === 1 ? "" : "s")
+        + " attached · Enter again to switch their view"
+      interactionHintTimer.restart()
+      return
+    }
+
+    clearAttachConfirmation()
+    var windowIndex = String(Number((item.window || ({})).index))
+    var paneId = item.kind === "pane" ? String((item.pane || ({})).id || "") : ""
+    attachSession(detailSessionName, windowIndex, paneId)
   }
 
   function activateSelected() {
     if (interactionBusy) return
     if (showingDetail) {
-      if (detailSessionName !== "") attachSession(detailSessionName)
+      activateDetailSelection()
       return
     }
     var session = selectedSession()
@@ -220,8 +277,13 @@ Panel {
     }
   }
 
-  function attachSession(name) {
-    runAction(["attach", name], true)
+  function attachSession(name, windowIndex, paneId) {
+    var args = ["attach", name]
+    if (windowIndex !== undefined && String(windowIndex) !== "")
+      args.push(String(windowIndex))
+    if (paneId !== undefined && String(paneId) !== "")
+      args.push(String(paneId))
+    runAction(args, true)
   }
 
   function openSessionDetail(name) {
@@ -232,6 +294,7 @@ Panel {
     detailWindows = []
     selectedDetailIndex = -1
     detailCursorActive = false
+    clearAttachConfirmation()
     detailError = ""
     detailProcess.command = [hostWidget.backendPath, "detail", name]
     detailProcess.running = true
@@ -251,6 +314,7 @@ Panel {
     detailWindows = []
     selectedDetailIndex = -1
     detailCursorActive = false
+    clearAttachConfirmation()
     detailError = ""
     revealSelection()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
@@ -263,11 +327,13 @@ Panel {
       detailWindows = result.windows
       selectedDetailIndex = detailRows.length > 0 ? 0 : -1
       detailCursorActive = false
+      clearAttachConfirmation()
       detailError = ""
     } else {
       detailWindows = []
       selectedDetailIndex = -1
       detailCursorActive = false
+      clearAttachConfirmation()
       detailError = result.error
     }
   }
@@ -421,6 +487,7 @@ Panel {
   }
 
   function showInteractionHint(message) {
+    pendingAttachTargetKey = ""
     interactionHint = message
     interactionHintTimer.restart()
   }
@@ -509,6 +576,7 @@ Panel {
       editText = ""
       actionError = ""
       interactionHint = ""
+      pendingAttachTargetKey = ""
       showingDetail = false
       detailSessionName = ""
       detailWindows = []
@@ -559,7 +627,10 @@ Panel {
   Timer {
     id: interactionHintTimer
     interval: 2200
-    onTriggered: root.interactionHint = ""
+    onTriggered: {
+      root.interactionHint = ""
+      root.pendingAttachTargetKey = ""
+    }
   }
 
   FileView {
@@ -1133,14 +1204,12 @@ Panel {
               readonly property bool isWindow: modelData.kind === "window"
               readonly property var windowData: modelData.window || ({})
               readonly property var paneData: modelData.pane || ({})
-              readonly property bool isActive: isWindow
-                ? windowData.active === true
-                : paneData.active === true
+              readonly property bool isActiveWindow: isWindow && windowData.active === true
 
               width: detailList.width
               height: isWindow ? root.detailWindowRowHeight : root.detailPaneRowHeight
               hasCursor: root.detailCursorActive && index === root.selectedDetailIndex
-              current: isActive
+              current: isActiveWindow
               foreground: root.foreground
               accent: Color.accent
 
@@ -1191,7 +1260,7 @@ Panel {
                     color: root.foreground
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.body
-                    font.bold: detailTreeRow.isWindow || detailTreeRow.isActive
+                    font.bold: detailTreeRow.isWindow
                     elide: Text.ElideRight
                   }
 
@@ -1208,14 +1277,14 @@ Panel {
 
                 Text {
                   id: activeDetailLabel
-                  visible: detailTreeRow.isWindow || detailTreeRow.isActive
+                  visible: detailTreeRow.isWindow
                   width: visible ? implicitWidth : 0
                   anchors.verticalCenter: parent.verticalCenter
                   text: detailTreeRow.isWindow
                     ? detailTreeRow.modelData.paneCount + " PANE"
                       + (detailTreeRow.modelData.paneCount === 1 ? "" : "S")
-                      + (detailTreeRow.isActive ? " · ACTIVE" : "")
-                    : "ACTIVE"
+                      + (detailTreeRow.isActiveWindow ? " · ACTIVE" : "")
+                    : ""
                   color: root.dim
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
@@ -1242,8 +1311,10 @@ Panel {
         Text {
           visible: root.showingDetail
           width: parent.width
-          text: "j/k select · ← sessions · Enter attach session"
-          color: root.dim
+          text: root.interactionHint !== ""
+            ? root.interactionHint
+            : "j/k select · ← sessions · Enter open selection"
+          color: root.interactionHint !== "" ? root.foreground : root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
           horizontalAlignment: Text.AlignHCenter

@@ -142,12 +142,22 @@ function clientLabel(attachedClients) {
   return plural(count, "client")
 }
 
+function workspaceLabel(session) {
+  var workspace = session && session.desktop && session.desktop.workspace
+  if (!workspace || workspace.id === undefined || workspace.id === null) return ""
+  var id = Number(workspace.id)
+  return isFinite(id) && id >= 0 ? "ws " + id : ""
+}
+
 function sessionMeta(session, nowMs) {
   if (!session) return ""
   var meta = plural(session.windows, "window")
     + " · " + formatAge(session.createdAt, nowMs)
   var clients = clientLabel(session.attachedClients)
-  return clients === "" ? meta : meta + " · " + clients
+  var workspace = workspaceLabel(session)
+  if (clients !== "") meta += " · " + clients
+  if (workspace !== "") meta += " · " + workspace
+  return meta
 }
 
 function clampedIndex(index, count) {

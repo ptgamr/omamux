@@ -4,10 +4,15 @@ Omamux is a local tmux session picker for the Omarchy Quattro bar. It brings the
 
 Version `0.1.0` is intentionally local-only. Remote host support is planned after the local workflow is stable.
 
+## Demo
+
+[Watch the 17-second Omamux demo](omamux-demo.mp4) to see session navigation, favorites, reordering, and inline rename in the Omarchy panel.
+
 ## Features
 
 - Lists local tmux sessions with window count, age, and attached client count.
 - Opens an exact session in Omarchy's configured terminal.
+- Focuses an existing local Hyprland terminal instead of opening a duplicate.
 - Creates and immediately attaches to a named session.
 - Renames an existing session while preserving its favorite position.
 - Keeps ordered favorites, with drag and keyboard reordering.
@@ -44,13 +49,17 @@ omarchy bar move io.github.ptgamr.omamux --section right
 - Use `j`/`k` or the arrow keys to select a session, then press Enter to attach.
 - Click `☆`/`★`, or press `f`, to toggle a favorite.
 - Drag a favorite row, or press `Shift+j`/`Shift+k`, to reorder it.
-- Press Right to inspect a session's window-and-pane tree, use `j`/`k` to select either level, then Left to go back.
+- Locally attached sessions show their Hyprland workspace as `ws N`.
+- Press Right to inspect a session's window-and-pane tree and use `j`/`k` to select either level.
+- Press Enter on a window or pane to focus that exact tmux target, then Left to go back.
 - Click `+`, or press `Shift+C`, to create a session.
 - Press `r` to rename the selected session, then Enter to confirm or Escape to cancel.
 - Press `Shift+R`, use the refresh button in the panel header, or right-click the bar widget, to refresh.
 - Press Escape to close.
 
 New favorites are inserted at the top. Favorites for sessions that no longer exist remain saved but hidden; recreating the same session restores its previous favorite position.
+
+When a selected session is already attached in a local Hyprland terminal, Omamux switches to that window's workspace and focuses it. Remote-only attachments do not count as local windows. Selecting a different window or pane in a session with attached clients requires a second Enter because changing tmux's active target affects every client attached to that session.
 
 ## State
 

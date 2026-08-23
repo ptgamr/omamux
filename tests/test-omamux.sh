@@ -11,6 +11,8 @@ export XDG_STATE_HOME="$TEST_ROOT/state"
 export TMUX_TMPDIR="$TEST_ROOT/tmux"
 export OMAMUX_TMUX_SOCKET="$SOCKET"
 export OMAMUX_TERMINAL_LAUNCHER="$TEST_ROOT/fake-terminal"
+export OMAMUX_HYPRCTL_BIN="$TEST_ROOT/fake-hyprctl"
+export OMAMUX_TEST_HYPR_CAPTURE="$TEST_ROOT/hyprctl-args"
 
 cleanup() {
   tmux -L "$SOCKET" kill-server 2>/dev/null || true
@@ -38,6 +40,32 @@ LAUNCHER
 chmod +x "$OMAMUX_TERMINAL_LAUNCHER"
 export OMAMUX_TEST_CAPTURE="$CAPTURE"
 
+cat >"$OMAMUX_HYPRCTL_BIN" <<'HYPRCTL'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ ${1:-} == clients && ${2:-} == -j ]]; then
+  if [[ -n ${OMAMUX_TEST_HYPR_PID:-} ]]; then
+    jq -cn --argjson pid "$OMAMUX_TEST_HYPR_PID" '[{
+      address: "0xabc123",
+      pid: $pid,
+      class: "foot",
+      title: "tmux",
+      workspace: {id: 7, name: "7"}
+    }]'
+  else
+    printf '[]\n'
+  fi
+  exit
+fi
+if [[ ${1:-} == dispatch ]]; then
+  printf '%s\n' "$*" >"${OMAMUX_TEST_HYPR_CAPTURE:?}"
+  printf 'ok\n'
+  exit
+fi
+exit 1
+HYPRCTL
+chmod +x "$OMAMUX_HYPRCTL_BIN"
+
 empty=$($OMAMUX list)
 assert_json "$empty" '.ok and .tmux.available and (.sessions | length == 0)' \
   "list should treat a missing tmux server as an empty list"
@@ -62,6 +90,17 @@ assert_json "$detail" '([.windows[].panes[]] | length) == 3' \
   "detail should return every pane in the session"
 assert_json "$detail" 'all(.windows[].panes[]; (.id | startswith("%")) and (.command | length > 0))' \
   "detail should return pane identity and command metadata"
+
+target_window=$(tmux -L "$SOCKET" list-windows -t '=alpha' -F '#{window_index}' | tail -n 1)
+target_pane=$(tmux -L "$SOCKET" list-panes -t "=alpha:$target_window" -F '#{pane_id}' | head -n 1)
+$OMAMUX attach alpha "$target_window" "$target_pane" >/dev/null
+active_target=$(tmux -L "$SOCKET" display-message -p -t "$target_pane" \
+  '#{window_active}	#{pane_active}')
+[[ $active_target == 1$'\t'1 ]] \
+  || fail "targeted attach should select the requested window and pane"
+if $OMAMUX attach alpha 99 >/dev/null; then
+  fail "targeted attach should reject a missing window"
+fi
 
 $OMAMUX favorite toggle alpha >/dev/null
 starred=$($OMAMUX list)
@@ -102,6 +141,25 @@ $OMAMUX attach alpha >/dev/null
 mapfile -t attach_args <"$CAPTURE"
 [[ ${attach_args[*]} == *"attach-session -t =alpha"* ]] \
   || fail "attach should launch an exact tmux target"
+
+script -qefc "tmux -L '$SOCKET' attach-session -t '=alpha'" /dev/null \
+  >/dev/null 2>&1 &
+hypr_owner_pid=$!
+export OMAMUX_TEST_HYPR_PID=$hypr_owner_pid
+for _ in {1..40}; do
+  [[ $(tmux -L "$SOCKET" list-clients -t '=alpha' 2>/dev/null | wc -l) -gt 0 ]] && break
+  sleep 0.05
+done
+focused=$($OMAMUX attach alpha)
+assert_json "$focused" '.ok and .action == "focus" and .window.workspace.id == 7' \
+  "attach should focus an existing local Hyprland window"
+grep -Fqx 'dispatch hl.dsp.focus({ window = "address:0xabc123" })' \
+  "$OMAMUX_TEST_HYPR_CAPTURE" \
+  || fail "attach should focus the matched Hyprland address"
+focused_list=$($OMAMUX list)
+assert_json "$focused_list" 'any(.sessions[];
+    .name == "alpha" and .desktop.workspace.id == 7 and .desktop.address == "0xabc123")' \
+  "list should expose the matched local workspace"
 
 $OMAMUX create 'client work; echo safe' >/dev/null
 tmux -L "$SOCKET" has-session -t '=client work; echo safe' \
