@@ -32,6 +32,7 @@ The demo shows session navigation, favorites, reordering, and inline session ren
 - Preserves favorite sessions that no longer exist, shows them as `Not running`, and provides a one-click option to recreate them with the same name.
 - Shows the windows and panes running inside each session.
 - Supports mouse and keyboard navigation.
+- Keeps keyboard selection in control until the pointer genuinely moves or clicks, including after a favorite reorder.
 - Refreshes automatically without changing tmux configuration or global options.
 - Inherits Quattro popup colors, borders, fonts, spacing, and theme changes.
 

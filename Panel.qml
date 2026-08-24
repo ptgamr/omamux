@@ -47,6 +47,8 @@ Panel {
   property var expectedFavoriteOrder: []
   property string interactionHint: ""
   property string pendingAttachTargetKey: ""
+  property bool rowHoverSuppressed: false
+  property point lastRowPointer: Qt.point(Number.NaN, Number.NaN)
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
@@ -61,6 +63,7 @@ Panel {
   readonly property bool interactionBusy: actionBusy || reorderAnimating || dragReordering || favoriteSyncPending
   readonly property int reorderDuration: 180
   readonly property int dragDisplaceDuration: 110
+  readonly property real pointerMovementThreshold: 0.5
   readonly property int favoriteCount: {
     var count = 0
     for (var i = 0; i < rows.length; i++)
@@ -149,8 +152,61 @@ Panel {
       Qt.callLater(function() { sessionList.positionViewAtIndex(selectedIndex, ListView.Contain) })
   }
 
+  function suppressRowHover() {
+    root.rowHoverSuppressed = true
+  }
+
+  function rowAtPointer(position, detail) {
+    var list = detail ? detailList : sessionList
+    var count = detail ? root.detailRows.length : root.rows.length
+    if (!list || !position) return -1
+    for (var index = 0; index < count; index++) {
+      var item = list.itemAtIndex(index)
+      if (!item || !item.visible) continue
+      var local = item.mapFromItem(keyCatcher, position.x, position.y)
+      if (local.x >= 0 && local.x <= item.width && local.y >= 0 && local.y <= item.height)
+        return index
+    }
+    return -1
+  }
+
+  function selectPointerRow(index, detail) {
+    if (detail) root.selectDetailRow(index)
+    else root.selectRow(index)
+  }
+
+  function trackRowPointer(position) {
+    if (!position) return false
+    var moved = Model.pointerMoved(
+      root.lastRowPointer.x, root.lastRowPointer.y,
+      position.x, position.y, root.pointerMovementThreshold)
+    root.lastRowPointer = Qt.point(position.x, position.y)
+    if (!root.rowHoverSuppressed || !moved) return moved
+    root.rowHoverSuppressed = false
+    var detail = root.showingDetail
+    var index = root.rowAtPointer(position, detail)
+    if (index >= 0) root.selectPointerRow(index, detail)
+    return moved
+  }
+
+  function handleRowPointer(index, item, mouseArea, detail) {
+    var position = item.mapToItem(keyCatcher, mouseArea.mouseX, mouseArea.mouseY)
+    var moved = root.trackRowPointer(position)
+    if (root.rowHoverSuppressed && !moved) return
+    root.rowHoverSuppressed = false
+    if (detail === root.showingDetail) root.selectPointerRow(index, detail)
+  }
+
+  function clickRow(index, item, mouseArea, detail) {
+    var position = item.mapToItem(keyCatcher, mouseArea.mouseX, mouseArea.mouseY)
+    root.lastRowPointer = Qt.point(position.x, position.y)
+    root.rowHoverSuppressed = false
+    if (detail === root.showingDetail) root.selectPointerRow(index, detail)
+  }
+
   function moveSelection(delta) {
     if (showingDetail || rows.length === 0 || interactionBusy) return
+    root.suppressRowHover()
     selectedIndex = Model.movedSelection(selectedIndex, rows.length, delta, cursorActive)
     cursorActive = true
     revealSelection()
@@ -158,6 +214,7 @@ Panel {
 
   function moveDetailSelection(delta) {
     if (!showingDetail || detailRows.length === 0 || interactionBusy) return
+    root.suppressRowHover()
     clearAttachConfirmation()
     selectedDetailIndex = Model.movedSelection(
       selectedDetailIndex, detailRows.length, delta, detailCursorActive)
@@ -305,6 +362,7 @@ Panel {
 
   function openSessionDetail(name) {
     if (interactionBusy || detailLoading || !hostWidget || name === "") return
+    root.suppressRowHover()
     cancelNameEdit()
     showingDetail = true
     detailSessionName = name
@@ -331,6 +389,7 @@ Panel {
 
   function closeSessionDetail() {
     if (!showingDetail) return
+    root.suppressRowHover()
     showingDetail = false
     detailSessionName = ""
     detailWindows = []
@@ -412,6 +471,7 @@ Panel {
   function animateReorder(from, to, nextRows, actionArgs) {
     if (interactionBusy || from < 0 || to < 0) return
 
+    root.suppressRowHover()
     reorderedRows = nextRows
     reorderAction = actionArgs
     cursorActive = true
@@ -595,12 +655,16 @@ Panel {
 
   onOpenedChanged: {
     if (opened) {
+      rowHoverSuppressed = false
+      lastRowPointer = Qt.point(Number.NaN, Number.NaN)
       nowMs = Date.now()
       cursorActive = false
       syncRows()
       if (hostWidget) hostWidget.refresh()
       Qt.callLater(function() { keyCatcher.forceActiveFocus() })
     } else {
+      rowHoverSuppressed = false
+      lastRowPointer = Qt.point(Number.NaN, Number.NaN)
       creating = false
       renaming = false
       renameOriginalName = ""
@@ -701,6 +765,10 @@ Panel {
       id: keyCatcher
       anchors.fill: parent
       blocked: root.editingName
+
+      HoverHandler {
+        onPointChanged: root.trackRowPointer(point.position)
+      }
 
       onMoveRequested: function(dx, dy) {
         if (dy !== 0) {
@@ -1025,12 +1093,17 @@ Panel {
               }
 
               MouseArea {
+                id: sessionMouseArea
                 anchors.fill: parent
                 hoverEnabled: true
                 enabled: !root.interactionBusy
                 cursorShape: Qt.PointingHandCursor
-                onEntered: root.selectRow(sessionRow.index)
+                onEntered: root.handleRowPointer(
+                  sessionRow.index, sessionRow, sessionMouseArea, false)
+                onPositionChanged: root.handleRowPointer(
+                  sessionRow.index, sessionRow, sessionMouseArea, false)
                 onClicked: {
+                  root.clickRow(sessionRow.index, sessionRow, sessionMouseArea, false)
                   var name = String(sessionRow.modelData.name || "")
                   if (sessionRow.modelData.running === false) root.recreateSession(name)
                   else root.attachSession(name)
@@ -1269,12 +1342,17 @@ Panel {
               accent: Color.accent
 
               MouseArea {
+                id: detailMouseArea
                 anchors.fill: parent
                 hoverEnabled: true
                 enabled: !root.interactionBusy
                 cursorShape: Qt.PointingHandCursor
-                onEntered: root.selectDetailRow(detailTreeRow.index)
-                onClicked: root.selectDetailRow(detailTreeRow.index)
+                onEntered: root.handleRowPointer(
+                  detailTreeRow.index, detailTreeRow, detailMouseArea, true)
+                onPositionChanged: root.handleRowPointer(
+                  detailTreeRow.index, detailTreeRow, detailMouseArea, true)
+                onClicked: root.clickRow(
+                  detailTreeRow.index, detailTreeRow, detailMouseArea, true)
               }
 
               Row {

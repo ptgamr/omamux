@@ -174,6 +174,19 @@ function movedSelection(index, count, delta, cursorActive) {
   return clampedIndex(Number(index || 0) + Number(delta || 0), length)
 }
 
+function pointerMoved(fromX, fromY, toX, toY, threshold) {
+  var previousX = Number(fromX)
+  var previousY = Number(fromY)
+  var currentX = Number(toX)
+  var currentY = Number(toY)
+  if (!isFinite(previousX) || !isFinite(previousY)
+      || !isFinite(currentX) || !isFinite(currentY)) return true
+  var minimum = Math.max(0, Number(threshold || 0))
+  var deltaX = currentX - previousX
+  var deltaY = currentY - previousY
+  return deltaX * deltaX + deltaY * deltaY > minimum * minimum
+}
+
 function favoriteOrder(sessions) {
   var rows = Array.isArray(sessions) ? sessions : []
   var names = []

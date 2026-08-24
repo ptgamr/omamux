@@ -47,6 +47,10 @@ assert.equal(model.movedSelection(0, 3, 1, false), 0)
 assert.equal(model.movedSelection(0, 3, -1, false), 2)
 assert.equal(model.movedSelection(0, 3, 1, true), 1)
 assert.equal(model.movedSelection(2, 3, 1, true), 2)
+assert.equal(model.pointerMoved(Number.NaN, Number.NaN, 20, 30, 0.5), true)
+assert.equal(model.pointerMoved(20, 30, 20, 30, 0.5), false)
+assert.equal(model.pointerMoved(20, 30, 20.3, 30.3, 0.5), false)
+assert.equal(model.pointerMoved(20, 30, 21, 30, 0.5), true)
 assert.equal(
   model.sessionMeta({ windows: 2, createdAt: 100, attachedClients: 1 }, 100 * 1000 + 24 * 3600 * 1000),
   "2 windows · 1d old · 1 client",
